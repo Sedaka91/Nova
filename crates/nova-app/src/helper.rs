@@ -32,6 +32,15 @@ pub enum Incoming {
     Shutdown,
 }
 
+/// Reads one line, replacing invalid UTF-8; `None` on EOF or a hard I/O error.
+fn read_line_lossy(reader: &mut impl BufRead) -> Option<String> {
+    let mut buf = Vec::new();
+    match reader.read_until(b'\n', &mut buf) {
+        Ok(0) | Err(_) => None,
+        Ok(_) => Some(String::from_utf8_lossy(&buf).trim_end().to_owned()),
+    }
+}
+
 /// A running helper child process.
 #[derive(Debug)]
 pub struct Helper {
@@ -57,8 +66,8 @@ impl Helper {
         let kind = spec.kind;
 
         thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
-                let Ok(line) = line else { break };
+            let mut reader = BufReader::new(stdout);
+            while let Some(line) = read_line_lossy(&mut reader) {
                 match serde_json::from_str::<HelperEvent>(&line) {
                     Ok(event) => {
                         if tx.send(Incoming::Event(kind, event)).is_err() {
@@ -72,7 +81,8 @@ impl Helper {
             let _ = tx.send(Incoming::Exited(kind));
         });
         thread::spawn(move || {
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            let mut reader = BufReader::new(stderr);
+            while let Some(line) = read_line_lossy(&mut reader) {
                 tracing::info!(?kind, "{line}");
             }
         });
@@ -212,5 +222,16 @@ mod tests {
             )
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn survives_invalid_utf8_lines() {
+        let (_helper, rx) = start(&["--binary-noise"]);
+        // No false Exited: the first message is Ready, and the process lives on.
+        assert_eq!(
+            rx.recv_timeout(WAIT).unwrap(),
+            Incoming::Event(HelperKind::Stt, HelperEvent::Ready)
+        );
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
     }
 }

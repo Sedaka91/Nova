@@ -17,6 +17,7 @@ def main():
     p.add_argument("--crash-count-file")
     p.add_argument("--noise", action="store_true")
     p.add_argument("--no-ready", action="store_true")
+    p.add_argument("--binary-noise", action="store_true")
     p.add_argument("--log")
     args = p.parse_args()
 
@@ -36,6 +37,12 @@ def main():
 
     if args.noise:
         print("kein json", flush=True)
+    if args.binary_noise:
+        # Invalid UTF-8 on both streams, before anything else.
+        sys.stdout.buffer.write(b"\xff\xfe kein utf8\n")
+        sys.stdout.buffer.flush()
+        sys.stderr.buffer.write(b"\xff\xfe kein utf8\n")
+        sys.stderr.buffer.flush()
     if not args.no_ready:
         emit({"event": "ready"})
 
