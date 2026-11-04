@@ -1,0 +1,75 @@
+# Floskel-Bibliothek – überbrückt die Wartezeit auf Opus.
+# Regeln: neutral bleiben (nichts behaupten), 3–5 Varianten pro Typ anstreben,
+# {anrede} setzt das Skript (Boss/Chef), {pfad} ist bei Löschbestätigungen Pflicht.
+# Stufe 2 (hoher Sarkasmus) ist noch nicht befüllt; fehlt eine Stufe, nimmt das Skript die nächstniedrigere.
+
+[[floskel]]
+typ = "frage"
+stufe = 0
+varianten = ["Ich prüfe das.", "Einen Moment.", "Ich sehe nach."]
+
+[[floskel]]
+typ = "frage"
+stufe = 1
+varianten = ["Gute Frage, {anrede}, ich schau mal nach.", "Moment, das ist nicht ganz trivial."]
+
+[[floskel]]
+typ = "aufgabe"
+stufe = 0
+varianten = ["Wird erledigt.", "Ich kümmere mich darum.", "Läuft."]
+
+[[floskel]]
+typ = "aufgabe"
+stufe = 1
+varianten = ["Bin dran, {anrede}.", "Wird erledigt, bevor Sie es sich anders überlegen."]
+
+[[floskel]]
+typ = "recherche"
+stufe = 0
+varianten = ["Ich recherchiere das.", "Ich suche die Quellen heraus.", "Das dauert einen Moment."]
+
+[[floskel]]
+typ = "recherche"
+stufe = 1
+varianten = ["Ich grabe mal etwas tiefer.", "Das braucht einen Augenblick, ich lese das Kleingedruckte."]
+
+[[floskel]]
+typ = "code"
+stufe = 0
+varianten = ["Ich sehe mir den Code an.", "Ich analysiere das.", "Ich prüfe den Quelltext."]
+
+[[floskel]]
+typ = "code"
+stufe = 1
+varianten = ["Ich werfe einen Blick in den Quelltext.", "Mal sehen, was da wieder schiefgelaufen ist."]
+
+[[floskel]]
+typ = "lange_wartezeit"
+stufe = 0
+varianten = ["Ich bin gleich fertig.", "Es dauert noch einen Moment."]
+
+[[floskel]]
+typ = "lange_wartezeit"
+stufe = 1
+varianten = ["Dauert einen Moment länger, {anrede}, ich bin gleich so weit."]
+
+# Ernst-Modus: immer sachlich, unabhängig vom Sarkasmus-Regler.
+
+[[ernst]]
+fall = "fehler"
+varianten = ["Das ist fehlgeschlagen, ich prüfe die Ursache.", "Es gab einen Fehler, ich sehe nach."]
+
+[[ernst]]
+fall = "warnung"
+varianten = ["Achtung, {anrede}, das braucht Ihre Aufmerksamkeit.", "Bevor ich weitermache: Das ist riskant."]
+
+[[ernst]]
+fall = "loeschbestaetigung"
+varianten = [
+  "{pfad} wird unwiderruflich gelöscht. Bitte in der App bestätigen.",
+  "Bestätigen Sie bitte in der App: Löschen von {pfad}.",
+]
+
+[[ernst]]
+fall = "limit"
+varianten = ["Das Kontingent ist erschöpft, ich wechsle zum lokalen Modell.", "Ich breche ab, weil die Rechte fehlen."]

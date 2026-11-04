@@ -1,0 +1,20 @@
+[package]
+name = "nova-app"
+description = "Nova Desktop-App: Sprachschleife, Router, Claude-Code-Sitzung, Oberfläche"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "nova"
+path = "src/main.rs"
+
+[dependencies]
+nova-core.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

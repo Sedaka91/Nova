@@ -1,0 +1,39 @@
+# Nova – Hauptkonfiguration. Wird vom Rust-Programm beim Start geprüft.
+
+[nova]
+aktivierungswort = "nova"   # Fallback laut Plan: "hey nova", falls es zu oft auslöst
+
+[persoenlichkeit]
+sarkasmus = 1               # Floskel-Stufe 0..=2 (0 = sachlich)
+gespraechigkeit = 4         # 0..=10
+foermlichkeit = 5           # 0..=10
+humor_haeufigkeit = 5       # 0..=10
+anrede_boss_anteil = 0.75   # Rest "Chef"
+
+[router]
+konfidenz_schwelle = 0.7    # darunter eine Stufe höher
+
+[floskeln]
+zweite_floskel_nach_s = 5.0
+
+[stimme]
+piper_modell = "de_DE-thorsten-medium"
+
+[spracherkennung]
+whisper_modell = "small"
+geraet = "auto"             # cpu | cuda | auto – CPU spart VRAM
+
+[modelle]
+ollama_url = "http://127.0.0.1:11434"
+chat_modell = ""            # Phase 3: Qwen/Llama 3–4 Mrd., 4-Bit
+
+[vault]
+pfad = ""                   # Pfad zum Obsidian Vault
+freigaben_notiz = "Nova/Freigaben.md"   # Ordnerfreigaben, Agent darf sie nicht ändern
+
+[lernen]
+min_wiederholungen = 5
+
+[ntfy]
+server = ""                 # öffentlich oder selbst gehostet – noch offen
+thema = ""

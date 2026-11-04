@@ -1,0 +1,11 @@
+# Launcher-Eintrag. Installation:
+#   cargo install --path crates/nova-app
+#   mkdir -p ~/.config/nova && cp config/*.toml ~/.config/nova/
+#   cp deploy/nova.desktop ~/.local/share/applications/
+[Desktop Entry]
+Type=Application
+Name=Nova
+Comment=Sprachassistent
+Exec=sh -c "NOVA_CONFIG_DIR=\\$HOME/.config/nova exec \\$HOME/.cargo/bin/nova"
+Terminal=false
+Categories=Utility;

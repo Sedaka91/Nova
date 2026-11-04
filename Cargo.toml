@@ -1,0 +1,24 @@
+[workspace]
+resolver = "3"
+members = ["crates/nova-core", "crates/nova-app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+nova-core = { path = "crates/nova-core" }
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

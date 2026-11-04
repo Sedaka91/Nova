@@ -1,0 +1,8 @@
+/target/
+**/__pycache__/
+helpers/.venv/
+*.log
+# Laufzeitdaten und Modelle gehören nicht ins Repo
+/models/
+/data/
+.env
