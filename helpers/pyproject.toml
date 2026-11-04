@@ -3,8 +3,13 @@ name = "nova-helpers"
 version = "0.1.0"
 description = "Hilfsprozesse für Nova: Wake Word, Spracherkennung, Sprachausgabe (JSON Lines über stdin/stdout)"
 requires-python = ">=3.12"
-# Abhängigkeiten kommen in Phase 1 per `uv add` (openwakeword, faster-whisper, piper-tts, sounddevice).
-dependencies = []
+dependencies = [
+    "faster-whisper>=1.2.1",
+    "numpy>=2.5.4",
+    "openwakeword>=0.6.0",
+    "piper-tts>=1.8.0",
+    "sounddevice>=0.5.6",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -17,3 +22,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.uv]
+# openWakeWord runs on ONNX; tflite-runtime has no wheels beyond Python 3.11.
+override-dependencies = ["tflite-runtime; python_version < '0'"]
