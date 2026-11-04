@@ -1,0 +1,20 @@
+{
+  "enabledPlugins": {
+    "beautiful-rust@beautiful-rust": true,
+    "python-development@claude-code-workflows": true
+  },
+  "extraKnownMarketplaces": {
+    "beautiful-rust": {
+      "source": {
+        "source": "github",
+        "repo": "morganlinton/BeautifulRust"
+      }
+    },
+    "claude-code-workflows": {
+      "source": {
+        "source": "github",
+        "repo": "wshobson/agents"
+      }
+    }
+  }
+}
