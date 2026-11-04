@@ -44,6 +44,9 @@ pub struct Config {
     pub vault: Vault,
     pub lernen: Learning,
     pub ntfy: Ntfy,
+    pub wakeword: WakeWord,
+    pub audio: Audio,
+    pub dialog: Dialog,
 }
 
 #[derive(Debug, Deserialize)]
@@ -122,6 +125,42 @@ pub struct Ntfy {
     pub thema: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WakeWord {
+    /// Path relative to the project root (contains a `/`) or the name of a bundled model.
+    pub modell: String,
+    /// Detection threshold (0.0..=1.0).
+    pub schwelle: f32,
+}
+
+impl WakeWord {
+    /// The model argument for the helper: a path is resolved against `root`, a name stays as is.
+    pub fn model_arg(&self, root: &Path) -> String {
+        if self.modell.contains('/') {
+            root.join(&self.modell).to_string_lossy().into_owned()
+        } else {
+            self.modell.clone()
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Audio {
+    /// PipeWire source the helpers record from.
+    pub eingabe: String,
+    /// PipeWire sink the helpers play to.
+    pub ausgabe: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Dialog {
+    /// Seconds to wait for speech after the wake word and after an answer.
+    pub nachfrage_s: f32,
+}
+
 impl Config {
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let config: Self = read_toml(path)?;
@@ -163,6 +202,25 @@ impl Config {
                 "lernen.min_wiederholungen must be at least 1".into(),
             ));
         }
+        if !(0.0..=1.0).contains(&self.wakeword.schwelle) {
+            return Err(ConfigError::Invalid(
+                "wakeword.schwelle must be 0.0..=1.0".into(),
+            ));
+        }
+        for (name, value) in [
+            ("modell", &self.wakeword.modell),
+            ("eingabe", &self.audio.eingabe),
+            ("ausgabe", &self.audio.ausgabe),
+        ] {
+            if value.is_empty() {
+                return Err(ConfigError::Invalid(format!("{name} must not be empty")));
+            }
+        }
+        if self.dialog.nachfrage_s.is_nan() || self.dialog.nachfrage_s <= 0.0 {
+            return Err(ConfigError::Invalid(
+                "dialog.nachfrage_s must be greater than 0".into(),
+            ));
+        }
         Ok(())
     }
 }
@@ -175,6 +233,52 @@ mod tests {
     fn shipped_config_is_valid() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/nova.toml");
         let config = Config::load(&path).expect("config/nova.toml must load");
-        assert_eq!(config.nova.aktivierungswort, "nova");
+        assert_eq!(config.nova.aktivierungswort, "hey nova");
+    }
+
+    fn shipped_text() -> String {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/nova.toml");
+        std::fs::read_to_string(path).unwrap()
+    }
+
+    fn assert_invalid(from: &str, to: &str) {
+        let text = shipped_text();
+        assert!(text.contains(from), "shipped config lacks `{from}`");
+        let config: Config = toml::from_str(&text.replace(from, to)).unwrap();
+        let result = config.validate();
+        assert!(matches!(result, Err(ConfigError::Invalid(_))), "{result:?}");
+    }
+
+    #[test]
+    fn rejects_threshold_above_one() {
+        assert_invalid("schwelle = 0.5 ", "schwelle = 1.5 ");
+    }
+
+    #[test]
+    fn rejects_zero_follow_up() {
+        assert_invalid("nachfrage_s = 8.0", "nachfrage_s = 0.0");
+    }
+
+    #[test]
+    fn rejects_empty_audio_device() {
+        assert_invalid("eingabe = \"nova_mic\"", "eingabe = \"\"");
+    }
+
+    #[test]
+    fn model_with_slash_is_a_path() {
+        let wake = WakeWord {
+            modell: "models/x.onnx".into(),
+            schwelle: 0.5,
+        };
+        assert_eq!(wake.model_arg(Path::new("/r")), "/r/models/x.onnx");
+    }
+
+    #[test]
+    fn bare_model_name_stays_a_name() {
+        let wake = WakeWord {
+            modell: "hey_jarvis".into(),
+            schwelle: 0.5,
+        };
+        assert_eq!(wake.model_arg(Path::new("/r")), "hey_jarvis");
     }
 }

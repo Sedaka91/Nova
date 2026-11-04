@@ -1,7 +1,18 @@
 # Nova – Hauptkonfiguration. Wird vom Rust-Programm beim Start geprüft.
 
 [nova]
-aktivierungswort = "nova"   # Fallback laut Plan: "hey nova", falls es zu oft auslöst
+aktivierungswort = "hey nova"
+
+[wakeword]
+modell = "hey_jarvis"       # Pfad (mit /) oder Name eines fertigen Modells; Wechsel auf models/hey_nova.onnx später
+schwelle = 0.5              # 0.0..=1.0
+
+[audio]
+eingabe = "nova_mic"
+ausgabe = "nova_sink"
+
+[dialog]
+nachfrage_s = 8.0           # größer als 0
 
 [persoenlichkeit]
 sarkasmus = 1               # Floskel-Stufe 0..=2 (0 = sachlich)
