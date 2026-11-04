@@ -3,7 +3,7 @@
 Sprachassistent im Stil von Jarvis für CachyOS/KDE: Aktivierungswort „Nova“, Dialogmodus, dreistufiges Routing (feste Befehle → lokales Modell → Opus über Claude Code im Pro-Abo).
 
 - Projektplan: https://claude.ai/artifact/VRvZVknuzQCJrbkjB8GUGz
-- UI-Entwürfe: https://claude.ai/artifact/MwAZQR8fMHf8Qz9Ab6zQDd (entschieden: Kommandobrücke + Overlay)
+- Design: [docs/design.md](docs/design.md), entschieden: Leitspur (https://claude.ai/artifact/W9fN34ZZdGoxcdS8uKaPu4)
 
 ## Aufbau
 
