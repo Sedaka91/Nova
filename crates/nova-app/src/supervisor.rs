@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::helper::{Helper, HelperSpec, Incoming};
 use crate::protocol::{HelperEvent, HelperKind, SttCommand, TtsCommand, WakewordCommand};
-use crate::voice_loop::{Action, Input, State, step};
+use crate::voice_loop::{Action, Dialog, Input, step};
 
 /// Timing of the voice loop.
 #[derive(Debug, Clone)]
@@ -53,7 +53,7 @@ pub fn run(
         settings,
         tx,
         rx,
-        state: State::Waiting,
+        dialog: Dialog::new(),
         deadline: None,
         spoken: None,
         next_id: 1,
@@ -159,7 +159,7 @@ struct Driver<'a> {
     /// Handed to restarted helpers; also keeps `rx` connected.
     tx: Sender<Incoming>,
     rx: Receiver<Incoming>,
-    state: State,
+    dialog: Dialog,
     deadline: Option<Instant>,
     /// Id of the utterance in progress; a `done` with any other id is stale.
     spoken: Option<String>,
@@ -285,18 +285,18 @@ impl<'a> Driver<'a> {
     }
 
     fn advance(&mut self, input: Input) {
-        let (next, actions) = step(self.state, input);
+        let (next, actions) = step(self.dialog.clone(), input);
         self.enter(next);
         for action in actions {
             self.apply(action);
         }
     }
 
-    fn enter(&mut self, next: State) {
-        if next != self.state {
-            tracing::info!(from = ?self.state, to = ?next, "state changed");
-            self.state = next;
+    fn enter(&mut self, next: Dialog) {
+        if next.state != self.dialog.state {
+            tracing::info!(from = ?self.dialog.state, to = ?next.state, "state changed");
         }
+        self.dialog = next;
     }
 
     fn apply(&mut self, action: Action) {
@@ -345,7 +345,7 @@ impl<'a> Driver<'a> {
         self.send(HelperKind::Wakeword, &WakewordCommand::Resume);
         self.deadline = None;
         self.spoken = None;
-        self.enter(State::Waiting);
+        self.enter(Dialog::new());
         Ok(Flow::Continue)
     }
 }

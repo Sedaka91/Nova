@@ -312,6 +312,30 @@ fn late_done_of_a_stopped_utterance_is_ignored() {
 }
 
 #[test]
+fn overlapping_utterances_are_spoken_once_with_both_texts() {
+    let rig = Rig::new("overlap");
+    let tts_script = rig.file("tts.json", SPEAK_SCRIPT);
+    let nova = rig.start(&[], &[], &["--script", &tts_script]);
+
+    nova.wake();
+    nova.inject(HelperKind::Stt, HelperEvent::SpeechStart);
+    nova.inject(HelperKind::Stt, HelperEvent::SpeechStart);
+    nova.say("Erster Teil");
+    nova.say("zweiter Teil");
+
+    let speak = r#"{"cmd":"speak","id":"1","text":"Du sagtest: Erster Teil zweiter Teil"}"#;
+    nova.wait_for(HelperKind::Tts, speak);
+    assert_eq!(
+        nova.lines(HelperKind::Tts)
+            .iter()
+            .filter(|line| line.contains(r#""cmd":"speak""#))
+            .count(),
+        1
+    );
+    nova.shut_down().expect("clean shutdown");
+}
+
+#[test]
 fn crashed_helper_restarts_once_and_loop_recovers() {
     let rig = Rig::new("restart");
     let crash_file = rig.path("crashed");

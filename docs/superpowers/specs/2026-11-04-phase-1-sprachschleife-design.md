@@ -57,7 +57,7 @@ Prozessführung läuft mit Threads und einem gemeinsamen `std::sync::mpsc`-Kanal
 
 ### Zustandsmaschine
 
-Signatur: `step(state, input) -> (state, Vec<Action>)`. `input` ist ein Helfer-Ereignis oder ein Zeitablauf. Die Funktion hat keine Seiteneffekte.
+Signatur: `step(dialog, input) -> (dialog, Vec<Action>)`. `dialog` enthält den Zustand und die offenen Äußerungen (siehe unten), `input` ist ein Helfer-Ereignis oder ein Zeitablauf. Die Funktion hat keine Seiteneffekte.
 
 | Zustand | Eingabe | Aktionen | Folgezustand |
 |---|---|---|---|
@@ -78,6 +78,8 @@ Weitere Regeln:
 - `stt` bleibt ab dem Wake Word durchgehend aktiv, auch während `Sprechen` (Barge-in) und `Nachfrage`. Nach jedem `final` hört es von selbst weiter, bis `cancel` kommt.
 - `stt: speech_start` in `Nachfrage` stoppt die Frist, damit ein längerer Satz nicht abgeschnitten wird. Der Zustand bleibt `Nachfrage`, bis `final` kommt; ist `final` leer, startet die Frist neu.
 - Während `Sprechen` eintreffende `final`-Ereignisse ohne vorheriges `speech_start` werden verworfen, sie stammen aus Restecho.
+- Offene Äußerungen werden gezählt, weil `stt` `speech_start` sofort sendet, `final` aber erst nach Whisper, also rund 1 s später. Beginnt der Nutzer nach einer Pause weiterzusprechen oder greift die 30-s-Obergrenze, kommt das nächste `speech_start` vor dem vorigen `final`. Jedes `speech_start` außer in `Lauschen` erhöht den Zähler, jedes `final` senkt ihn und legt seinen Text ab, sofern er nicht leer ist. Solange noch eine Äußerung offen ist, passiert nichts: keine Aktion, kein Zustandswechsel, keine Frist. Erst das letzte `final` löst die Zeile der Tabelle aus, mit allen Texten, durch je ein Leerzeichen verbunden; „mit Text“ und „ohne Text“ meinen diesen verbundenen Text. So geht kein Satzteil verloren, und ein leeres `final` einer Fehlauslösung bricht keinen laufenden Satz ab.
+- Ein Barge-in führt mit einer offenen Äußerung nach `Zuhören`. Jeder Wechsel nach `Lauschen` löscht Zähler und Texte.
 - `partial` wird in Phase 1 nur geloggt.
 - Der gesprochene Text ist `Du sagtest: {text}`. Die Satzvorlage liegt im Rust-Code und zieht in Phase 2 in die Module um.
 
