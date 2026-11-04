@@ -2,10 +2,18 @@
 name = "nova-helpers"
 version = "0.1.0"
 description = "Hilfsprozesse für Nova: Wake Word, Spracherkennung, Sprachausgabe (JSON Lines über stdin/stdout)"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 # Abhängigkeiten kommen in Phase 1 per `uv add` (openwakeword, faster-whisper, piper-tts, sounddevice).
 dependencies = []
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

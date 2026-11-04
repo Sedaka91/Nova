@@ -1,10 +1,17 @@
 //! Nova main process. Phase 1 adds the voice loop (wake word -> STT -> echo -> TTS).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use anyhow::Context;
+use nova_app::helper::Incoming;
+use nova_app::supervisor::{self, LoopSettings};
 use nova_core::{config::Config, phrases::Phrases};
 use tracing_subscriber::EnvFilter;
+
+/// Loading the speech models may take this long on a cold start.
+const READY_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn config_dir() -> PathBuf {
     std::env::var_os("NOVA_CONFIG_DIR").map_or_else(|| PathBuf::from("config"), PathBuf::from)
@@ -13,6 +20,7 @@ fn config_dir() -> PathBuf {
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .with_writer(std::io::stderr)
         .init();
 
     let dir = config_dir();
@@ -25,5 +33,22 @@ fn main() -> anyhow::Result<()> {
         phrase_sets = phrases.floskel.len(),
         "configuration loaded"
     );
-    Ok(())
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let specs = supervisor::helper_specs(&config, &root);
+    let settings = LoopSettings {
+        ready_timeout: READY_TIMEOUT,
+        follow_up: Duration::try_from_secs_f32(config.dialog.nachfrage_s)
+            .context("dialog.nachfrage_s is out of range")?,
+    };
+
+    let (tx, rx) = mpsc::channel();
+    let shutdown = tx.clone();
+    ctrlc::set_handler(move || {
+        // A closed receiver means the loop has already ended.
+        let _ = shutdown.send(Incoming::Shutdown);
+    })
+    .context("installing the Ctrl+C handler")?;
+
+    supervisor::run(&specs, &settings, tx, rx)
 }

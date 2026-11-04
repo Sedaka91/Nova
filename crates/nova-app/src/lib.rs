@@ -2,4 +2,5 @@
 
 pub mod helper;
 pub mod protocol;
+pub mod supervisor;
 pub mod voice_loop;

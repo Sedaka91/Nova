@@ -7,7 +7,10 @@ import sys
 
 
 def emit(obj):
-    print(json.dumps(obj), flush=True)
+    # Raw UTF-8 like the real helpers, independent of the locale.
+    line = json.dumps(obj, ensure_ascii=False) + "\n"
+    sys.stdout.buffer.write(line.encode("utf-8"))
+    sys.stdout.buffer.flush()
 
 
 def main():
@@ -18,8 +21,11 @@ def main():
     p.add_argument("--noise", action="store_true")
     p.add_argument("--no-ready", action="store_true")
     p.add_argument("--binary-noise", action="store_true")
+    p.add_argument("--fail-with")
     p.add_argument("--log")
     args = p.parse_args()
+
+    sys.stdin.reconfigure(encoding="utf-8")
 
     on_command = {}
     if args.script:
@@ -27,13 +33,19 @@ def main():
             on_command = json.load(f).get("auf_befehl", {})
 
     crash_after = args.crash_after
+    fail_with = args.fail_with
     if args.crash_count_file:
-        # Crash only on the very first run.
+        # Crash only on the very first run; --fail-with applies to the later ones.
         if os.path.exists(args.crash_count_file):
             crash_after = None
         else:
+            fail_with = None
             with open(args.crash_count_file, "w", encoding="utf-8") as f:
                 f.write("1")
+
+    if fail_with:
+        emit({"event": "error", "message": fail_with})
+        sys.exit(1)
 
     if args.noise:
         print("kein json", flush=True)
