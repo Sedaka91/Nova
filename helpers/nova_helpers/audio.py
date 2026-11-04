@@ -35,6 +35,11 @@ def data_dir() -> Path:
     return Path(base) / "nova" if base else Path.home() / ".local" / "share" / "nova"
 
 
+def missing_model_message(path: Path) -> str:
+    """Returns the user-facing text for a model file that setup has not downloaded."""
+    return f"Modelldatei fehlt: {path}. Zum Laden: uv run --project helpers python -m nova_helpers.setup"
+
+
 def _unavailable(node: str) -> AudioDeviceError:
     return AudioDeviceError(f"Audiogerät {node} ist nicht verfügbar. {_HINT}")
 
