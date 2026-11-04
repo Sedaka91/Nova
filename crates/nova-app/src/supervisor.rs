@@ -24,9 +24,9 @@ pub struct LoopSettings {
 /// Runs all helpers and the voice loop until `Incoming::Shutdown` arrives.
 ///
 /// # Errors
-/// Fails if a helper cannot start, does not report `ready` in time, exits while the
-/// supervisor waits for `ready`, or exits for the second time. The error names the
-/// helper and its last `error` message.
+/// Fails if a helper cannot start, does not report `ready` in time, exits during the
+/// initial start, or exits for the second time. The error names the helper and its last
+/// `error` message.
 ///
 /// # Panics
 /// Panics if `specs` lacks a helper the voice loop talks to.
@@ -59,7 +59,7 @@ pub fn run(
         next_id: 1,
     };
     let kinds: Vec<HelperKind> = specs.iter().map(|spec| spec.kind).collect();
-    match driver.await_ready(&kinds)? {
+    match driver.await_ready(&kinds, OnExit::Fatal)? {
         Flow::Continue => driver.run_loop(),
         Flow::Shutdown => Ok(()),
     }
@@ -138,6 +138,13 @@ enum Flow {
     Shutdown,
 }
 
+/// What an `Exited` means while waiting for `ready`.
+#[derive(Clone, Copy)]
+enum OnExit {
+    Fatal,
+    Restart,
+}
+
 /// One supervised helper and what the driver remembers about it.
 struct Slot<'a> {
     spec: &'a HelperSpec,
@@ -195,9 +202,9 @@ impl<'a> Driver<'a> {
     }
 
     /// Waits for `ready` of the given helpers; all other events are dropped.
-    fn await_ready(&mut self, kinds: &[HelperKind]) -> anyhow::Result<Flow> {
+    fn await_ready(&mut self, kinds: &[HelperKind], on_exit: OnExit) -> anyhow::Result<Flow> {
         let mut pending = kinds.to_vec();
-        let end = Instant::now() + self.settings.ready_timeout;
+        let mut end = Instant::now() + self.settings.ready_timeout;
         while let Some(&first) = pending.first() {
             let timeout = end.saturating_duration_since(Instant::now());
             match self.rx.recv_timeout(timeout) {
@@ -211,9 +218,16 @@ impl<'a> Driver<'a> {
                 Ok(Incoming::Event(kind, event)) => {
                     tracing::debug!(?kind, ?event, "event dropped while waiting for ready");
                 }
-                Ok(Incoming::Exited(kind)) => {
-                    return Err(self.failure(kind, "exited while waiting for ready"));
-                }
+                Ok(Incoming::Exited(kind)) => match on_exit {
+                    OnExit::Fatal => {
+                        return Err(self.failure(kind, "exited while waiting for ready"));
+                    }
+                    OnExit::Restart => {
+                        self.respawn(kind)?;
+                        pending.push(kind);
+                        end = Instant::now() + self.settings.ready_timeout;
+                    }
+                },
                 Ok(Incoming::Shutdown) => return Ok(Flow::Shutdown),
                 Err(_) => return Err(self.failure(first, "did not report ready in time")),
             }
@@ -306,8 +320,8 @@ impl<'a> Driver<'a> {
         }
     }
 
-    /// Replaces a helper once and brings all helpers back to the waiting state.
-    fn restart(&mut self, kind: HelperKind) -> anyhow::Result<Flow> {
+    /// Replaces an exited helper, which is allowed once per helper.
+    fn respawn(&mut self, kind: HelperKind) -> anyhow::Result<()> {
         if self.slot(kind).restarted {
             return Err(self.failure(kind, "exited for the second time"));
         }
@@ -317,8 +331,13 @@ impl<'a> Driver<'a> {
         slot.restarted = true;
         slot.helper.stop();
         slot.helper = spawn(slot.spec, tx)?;
+        Ok(())
+    }
 
-        if let Flow::Shutdown = self.await_ready(&[kind])? {
+    /// Recovers from an exited helper and brings all helpers back to the waiting state.
+    fn restart(&mut self, kind: HelperKind) -> anyhow::Result<Flow> {
+        self.respawn(kind)?;
+        if let Flow::Shutdown = self.await_ready(&[kind], OnExit::Restart)? {
             return Ok(Flow::Shutdown);
         }
         self.send(HelperKind::Tts, &TtsCommand::Stop);

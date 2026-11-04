@@ -14,6 +14,7 @@ path = "src/main.rs"
 nova-core.workspace = true
 anyhow.workspace = true
 ctrlc.workspace = true
+nix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

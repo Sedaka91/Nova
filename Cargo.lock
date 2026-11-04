@@ -146,6 +146,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ctrlc",
+ "nix",
  "nova-core",
  "serde",
  "serde_json",

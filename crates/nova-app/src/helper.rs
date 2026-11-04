@@ -1,12 +1,15 @@
 //! One supervised helper child process: JSON Lines over stdin/stdout.
 
 use std::io::{self, BufRead, BufReader, Write};
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use nix::sys::signal::{Signal, killpg};
+use nix::unistd::Pid;
 use serde::Serialize;
 
 use crate::protocol::{HelperEvent, HelperKind};
@@ -51,6 +54,9 @@ pub struct Helper {
 impl Helper {
     /// Starts the helper and spawns reader threads for stdout and stderr.
     ///
+    /// The helper gets its own process group: `uv` stays the parent of Python, Ctrl+C on the
+    /// terminal must not reach either of them, and `stop` must be able to kill both.
+    ///
     /// # Errors
     /// Returns an error if the process cannot be started.
     pub fn spawn(spec: &HelperSpec, tx: Sender<Incoming>) -> io::Result<Self> {
@@ -59,6 +65,7 @@ impl Helper {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .process_group(0)
             .spawn()?;
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().expect("stdout was piped");
@@ -105,7 +112,7 @@ impl Helper {
         stdin.flush()
     }
 
-    /// Closes stdin, waits up to 2 s for exit, then kills. Idempotent.
+    /// Closes stdin, waits up to 2 s for exit, then kills its process group. Idempotent.
     pub fn stop(&mut self) {
         self.stdin = None;
         let deadline = Instant::now() + STOP_GRACE;
@@ -116,7 +123,7 @@ impl Helper {
             thread::sleep(STOP_POLL);
         }
         // Errors mean the process is already gone; wait() reaps it.
-        let _ = self.child.kill();
+        let _ = killpg(Pid::from_raw(self.child.id() as i32), Signal::SIGKILL);
         let _ = self.child.wait();
     }
 }
@@ -193,6 +200,50 @@ mod tests {
         assert!(helper.child.try_wait().unwrap().is_some());
         helper.stop(); // idempotent
         assert!(helper.send(&SttCommand::Listen).is_err());
+    }
+
+    /// Fields of `/proc/<pid>/stat` after the command name, `None` for a vanished process.
+    fn proc_stat(pid: u32) -> Option<Vec<String>> {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let fields = stat.rsplit_once(')')?.1;
+        Some(fields.split_whitespace().map(str::to_owned).collect())
+    }
+
+    /// A zombie counts as gone: only its parent can still reap it.
+    fn is_running(pid: u32) -> bool {
+        proc_stat(pid).is_some_and(|fields| fields[0] != "Z")
+    }
+
+    #[test]
+    fn helper_gets_its_own_process_group() {
+        let (helper, rx) = start(&[]);
+        rx.recv_timeout(WAIT).unwrap(); // Ready
+        let pid = helper.child.id();
+        let fields = proc_stat(pid).expect("helper is running");
+        assert_eq!(fields[2], pid.to_string(), "pgrp of helper {pid}");
+    }
+
+    #[test]
+    fn stop_kills_a_stubborn_helper_with_its_children() {
+        let path = std::env::temp_dir().join(format!("nova-stubborn-{}", std::process::id()));
+        let (mut helper, rx) = start(&["--stubborn", path.to_str().unwrap()]);
+        rx.recv_timeout(WAIT).unwrap(); // Ready
+        let pids: Vec<u32> = std::fs::read_to_string(&path)
+            .unwrap()
+            .split_whitespace()
+            .map(|pid| pid.parse().unwrap())
+            .collect();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(pids.len(), 2);
+        assert!(pids.iter().all(|pid| is_running(*pid)));
+
+        helper.stop();
+
+        let end = Instant::now() + WAIT;
+        while pids.iter().any(|pid| is_running(*pid)) {
+            assert!(Instant::now() < end, "still running: {pids:?}");
+            thread::sleep(STOP_POLL);
+        }
     }
 
     #[test]

@@ -167,6 +167,16 @@ impl Running {
         }
     }
 
+    fn exited(&self, kind: HelperKind) {
+        self.tx
+            .send(Incoming::Exited(kind))
+            .expect("supervisor is running");
+    }
+
+    fn open_gate(&self, gate: &str) {
+        fs::write(gate, "").expect("open gate");
+    }
+
     fn say(&self, text: &str) {
         self.inject(HelperKind::Stt, HelperEvent::Final { text: text.into() });
     }
@@ -322,6 +332,126 @@ fn crashed_helper_restarts_once_and_loop_recovers() {
         HelperKind::Tts,
         r#"{"cmd":"speak","id":"1","text":"Du sagtest: Wieder da"}"#,
     );
+    nova.shut_down().expect("clean shutdown");
+}
+
+#[test]
+fn helpers_crashing_together_restart_and_loop_recovers() {
+    let rig = Rig::new("together");
+    let wakeword_file = rig.path("wakeword-crashed");
+    let stt_file = rig.path("stt-crashed");
+    let nova = rig.start(
+        &["--crash-after", "1", "--crash-count-file", &wakeword_file],
+        &["--crash-after", "1", "--crash-count-file", &stt_file],
+        &[],
+    );
+
+    nova.wake();
+
+    nova.wait_for(HelperKind::Wakeword, r#"{"cmd":"resume"}"#);
+    nova.wait_for(HelperKind::Stt, r#"{"cmd":"cancel"}"#);
+    nova.wake();
+    nova.say("Beide da");
+    nova.wait_for(
+        HelperKind::Tts,
+        r#"{"cmd":"speak","id":"1","text":"Du sagtest: Beide da"}"#,
+    );
+    nova.shut_down().expect("clean shutdown");
+}
+
+#[test]
+fn exit_during_restart_wait_restarts_that_helper_too() {
+    let rig = Rig::new("restart-wait");
+    let stt_crash = rig.path("stt-crashed");
+    let tts_crash = rig.path("tts-crashed");
+    let exit_gate = rig.path("exit-gate");
+    let ready_gate = rig.path("ready-gate");
+    let stt = [
+        "--crash-after",
+        "1",
+        "--crash-count-file",
+        &stt_crash,
+        "--ready-gate",
+        &ready_gate,
+    ];
+    let tts = [
+        "--crash-count-file",
+        &tts_crash,
+        "--exit-gate",
+        &exit_gate,
+        "--ready-gate",
+        &ready_gate,
+    ];
+    let nova = rig.start(&[], &stt, &tts);
+
+    nova.wake();
+    nova.wait_for(HelperKind::Stt, "gate");
+    nova.open_gate(&exit_gate);
+    nova.wait_for(HelperKind::Tts, "gate");
+    nova.open_gate(&ready_gate);
+
+    nova.wait_for(HelperKind::Wakeword, r#"{"cmd":"resume"}"#);
+    nova.wake();
+    nova.say("Alle da");
+    nova.wait_for(
+        HelperKind::Tts,
+        r#"{"cmd":"speak","id":"1","text":"Du sagtest: Alle da"}"#,
+    );
+
+    // The restart of the other helper counted: its next exit is the second one.
+    nova.exited(HelperKind::Tts);
+    let text = error_text(nova.outcome());
+    assert!(text.contains("tts"), "{text}");
+    assert!(text.contains("second"), "{text}");
+}
+
+#[test]
+fn second_exit_during_restart_wait_is_fatal_and_names_helper() {
+    let rig = Rig::new("second-in-wait");
+    let crash_file = rig.path("crashed");
+    let exit_gate = rig.path("exit-gate");
+    let ready_gate = rig.path("ready-gate");
+    let stt = [
+        "--crash-after",
+        "1",
+        "--crash-count-file",
+        &crash_file,
+        "--ready-gate",
+        &ready_gate,
+    ];
+    // Without a crash count file the replacement exits right away as well.
+    let nova = rig.start(&[], &stt, &["--exit-gate", &exit_gate]);
+
+    nova.wake();
+    nova.wait_for(HelperKind::Stt, "gate");
+    nova.open_gate(&exit_gate);
+
+    let text = error_text(nova.outcome());
+    assert!(text.contains("tts"), "{text}");
+    assert!(text.contains("second"), "{text}");
+}
+
+#[test]
+fn shutdown_during_restart_wait_is_clean() {
+    let rig = Rig::new("shutdown-in-wait");
+    let crash_file = rig.path("crashed");
+    let gate = rig.path("gate");
+    let nova = rig.start(
+        &[],
+        &[
+            "--crash-after",
+            "1",
+            "--crash-count-file",
+            &crash_file,
+            "--ready-gate",
+            &gate,
+        ],
+        &[],
+    );
+
+    nova.wake();
+    nova.wait_for(HelperKind::Stt, "gate");
+
     nova.shut_down().expect("clean shutdown");
 }
 
