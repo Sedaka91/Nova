@@ -73,8 +73,13 @@ pub fn launch(program: &str, args: &[&str]) -> Result<(), ToolError> {
 
 /// HTTP agent with a 5 s timeout; 4xx/5xx are returned as responses so bodies stay readable.
 pub fn http_agent() -> ureq::Agent {
+    agent_with_timeout(Duration::from_secs(5))
+}
+
+/// HTTP agent with the given overall timeout; 4xx/5xx are returned as responses.
+pub fn agent_with_timeout(timeout: Duration) -> ureq::Agent {
     ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(5)))
+        .timeout_global(Some(timeout))
         .http_status_as_error(false)
         .build()
         .into()

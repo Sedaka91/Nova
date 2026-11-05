@@ -4,6 +4,7 @@ pub mod commands;
 pub mod helper;
 pub mod launcher;
 pub mod music;
+pub mod ollama;
 pub mod protocol;
 pub mod search;
 pub mod secrets;
