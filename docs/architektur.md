@@ -32,7 +32,7 @@ Feste Befehle laufen nicht in der Hauptschleife, sondern auf einem eigenen Arbei
 0. ✅ Grundgerüst (Workspace, Konfiguration, Floskeln, Launcher-Eintrag)
 1. Sprachschleife mit Echo-Test (umgesetzt, gemeinsame Abnahme mit Phase 2 offen)
 2. Stufe 1: Musik, Wetter, Apps, Suche (umgesetzt, gemeinsame Abnahme mit Phase 1 offen)
-3. Lokales Modell (Ollama): unbekannte Sätze gehen an das Modell, Aufwärmen und VRAM-Protokoll beim Start (umgesetzt, Abnahme am Gerät offen). Gemessen am 2026-11-05 mit `qwen2.5:3b` (Q4_K_M) auf der RTX 3060 Ti: vollständig in VRAM (`size_vram` = `size` = 2,16 GB), GPU-Belegung 3,2 GB → 5,3 GB insgesamt, eine kurze Antwort rund 2,3 s. Das Paket `ollama` allein läuft nur auf der CPU, dafür braucht es `ollama-cuda`. Die Konfidenz-Schwelle `router.konfidenz_schwelle` wirkt erst mit Stufe 3 in Phase 4.
+3. Lokales Modell (Ollama): unbekannte Sätze gehen an das Modell, Aufwärmen und VRAM-Protokoll beim Start (umgesetzt, am Gerät abgenommen 2026-11-05). Gemessen am 2026-11-05 mit `qwen2.5:3b` (Q4_K_M) auf der RTX 3060 Ti: vollständig in VRAM (`size_vram` = `size` = 2,16 GB), GPU-Belegung 3,2 GB → 5,3 GB insgesamt, eine kurze Antwort rund 2,3 s. Das Paket `ollama` allein läuft nur auf der CPU, dafür braucht es `ollama-cuda`. Die Konfidenz-Schwelle `router.konfidenz_schwelle` wirkt erst mit Stufe 3 in Phase 4.
 4. Claude Code: dauerhafte Sitzung mit Streaming-Eingabe
 5. Charakter und Floskeln (Regler, Sperrliste, Ernst-Modus)
 6. Obsidian Vault (Index, gezieltes Nachladen, Zurückschreiben)
