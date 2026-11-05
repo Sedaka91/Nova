@@ -21,11 +21,15 @@ JSON Lines: eine JSON-Zeile pro Nachricht, stdin = Befehle an den Helfer, stdout
 
 Jeder Helfer meldet beim Start `{"event":"ready"}`. Fehler: `{"event":"error","message":"…"}`.
 
+## Arbeits-Thread (Phase 2)
+
+Feste Befehle laufen nicht in der Hauptschleife, sondern auf einem eigenen Arbeits-Thread (`supervisor::Executor`). So bleiben Barge-in und Ctrl+C während eines Befehls bedienbar. Der Dialog wechselt dafür in den Zustand `Working`: Er wartet auf die `Reply` des Threads, höchstens 20 s (`WORK_TIMEOUT`). Spricht der Nutzer währenddessen, wird das Ergebnis verworfen und Nova hört zu; läuft die Frist ab, sagt Nova das und der Thread wird verworfen. Jeder Befehl liefert eine `Reply` (`Say` oder `Silent`), Fehler sind gesprochene Sätze. Der Aufruf `nova spotify-login` läuft vor dem Start der Hilfsprozesse und braucht weder gültige `nova.toml` noch Audiogeräte.
+
 ## Phasen
 
 0. ✅ Grundgerüst (Workspace, Konfiguration, Floskeln, Launcher-Eintrag)
-1. Sprachschleife mit Echo-Test
-2. Stufe 1: Musik, Wetter, Apps, Suche
+1. Sprachschleife mit Echo-Test (umgesetzt, Abnahme offen: `models/hey_nova.onnx` fehlt noch)
+2. Stufe 1: Musik, Wetter, Apps, Suche (umgesetzt, Abnahme am Gerät offen)
 3. Lokales Modell (Ollama), Router, VRAM messen
 4. Claude Code: dauerhafte Sitzung mit Streaming-Eingabe
 5. Charakter und Floskeln (Regler, Sperrliste, Ernst-Modus)

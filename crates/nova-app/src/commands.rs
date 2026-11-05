@@ -1,4 +1,8 @@
-//! Fixed commands: pure recognition of recognized German speech.
+//! Fixed commands: recognition of German speech and their execution.
+
+use nova_core::apps::Apps;
+
+use crate::{launcher, music, search, spotify, weather};
 
 /// Day a weather report refers to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +48,32 @@ pub enum Command {
 pub enum Reply {
     Say(String),
     Silent,
+}
+
+/// Everything a command needs to run.
+pub struct Context {
+    /// Home place from `nova.toml`, used when no place was spoken.
+    pub home: String,
+    pub apps: Apps,
+}
+
+impl Context {
+    /// Runs a command; failures come back as spoken sentences.
+    pub fn execute(&self, command: Command) -> Reply {
+        match command {
+            Command::Dismiss => Reply::Silent,
+            Command::Play
+            | Command::Pause
+            | Command::Next
+            | Command::Previous
+            | Command::VolumeStep(_)
+            | Command::VolumeSet(_) => music::control(&command),
+            Command::Weather { place, day } => weather::report(place.as_deref(), day, &self.home),
+            Command::Search(engine, term) => search::open(engine, &term),
+            Command::OpenApp(name) => launcher::open(&self.apps, &name),
+            Command::PlayContent { kind, query } => spotify::play(kind, &query),
+        }
+    }
 }
 
 /// Lowercase, strip punctuation, collapse whitespace, drop wake and politeness words.
@@ -323,5 +353,33 @@ mod tests {
         ] {
             assert_eq!(parse(text), None, "input: {text}");
         }
+    }
+
+    fn context(home: &str) -> Context {
+        Context {
+            home: home.into(),
+            apps: Apps::from_map(std::collections::BTreeMap::new()).unwrap(),
+        }
+    }
+
+    #[test]
+    fn execute_dismiss_is_silent() {
+        assert_eq!(context("").execute(Dismiss), Reply::Silent);
+    }
+
+    #[test]
+    fn execute_unlisted_app_is_refused() {
+        assert_eq!(
+            context("").execute(OpenApp("notepad".into())),
+            Reply::Say("notepad ist nicht freigegeben.".into())
+        );
+    }
+
+    #[test]
+    fn execute_weather_without_home_asks_for_it() {
+        assert_eq!(
+            context("").execute(weather(None, Day::Today)),
+            Reply::Say("Dein Heimatort fehlt in den Einstellungen.".into())
+        );
     }
 }

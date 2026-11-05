@@ -25,7 +25,22 @@ cargo run -p nova-app
 
 ## Stand
 
-Phase 0 (Grundgerüst) erledigt. Nächster Schritt laut Plan – **Phase 1:** Wake Word, faster-whisper und Piper als Hilfsprozesse anbinden und zu einer Sprachschleife mit Echo-Test verbinden.
+Phase 0 (Grundgerüst) ist erledigt. **Phase 1** (Sprachschleife) ist umgesetzt, aber nicht vollständig abgenommen: `models/hey_nova.onnx` fehlt noch. **Phase 2** (Stufe 1: Musik, Wetter, Apps, Suche) ist umgesetzt und wartet auf die Abnahme am Gerät. Nächster Schritt laut Plan: Phase 3 (lokales Modell, Router).
+
+### Stufe 1 einrichten
+
+```sh
+sudo pacman -S playerctl
+```
+
+- **Heimatort:** In der lokalen `config/nova.toml` unter `[wetter]` `heimatort = "…"` setzen (nicht einchecken). Ohne Heimatort sagt Nova, dass er fehlt.
+- **Spotify:** Im Spotify-Dashboard eine App registrieren, Redirect-URI `http://127.0.0.1:8898/callback`. Danach einmalig anmelden; Nova fragt im Terminal nach der Client-ID und öffnet den Browser. Client-ID und Token landen in KWallet.
+
+```sh
+cargo run -p nova-app -- spotify-login
+```
+
+Wetterdaten von Open-Meteo.com (CC BY 4.0)
 
 ### Echounterdrückung (PipeWire)
 
