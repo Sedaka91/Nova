@@ -9,3 +9,4 @@ pub mod search;
 pub mod supervisor;
 pub mod tools;
 pub mod voice_loop;
+pub mod weather;
