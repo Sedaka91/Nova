@@ -286,6 +286,7 @@ impl<'a> Driver<'a> {
                 return;
             }
             HelperEvent::Partial { text } => tracing::info!(text, "partial"),
+            HelperEvent::Final { text } => tracing::info!(text, "final"),
             HelperEvent::Done { id } if self.spoken.as_ref() != Some(id) => {
                 tracing::debug!(id, "stale done dropped");
                 return;
@@ -332,6 +333,7 @@ impl<'a> Driver<'a> {
             Action::Wakeword(command) => self.send(HelperKind::Wakeword, &command),
             Action::Stt(command) => self.send(HelperKind::Stt, &command),
             Action::Speak(text) => {
+                tracing::info!(text, "speak");
                 let id = self.next_id.to_string();
                 self.next_id += 1;
                 self.spoken = Some(id.clone());

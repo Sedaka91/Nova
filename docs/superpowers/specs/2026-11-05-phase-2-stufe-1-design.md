@@ -94,7 +94,7 @@ Weitere Regeln:
 
 `parse(text: &str) -> Option<Command>` ist rein und arbeitet mit festen Mustern, ohne Regex-Bibliothek.
 
-Normalisierung: Kleinschreibung, Satzzeichen `.,!?;:„“"'` entfernen, Leerraum zusammenfassen, vorn „hey nova“ oder „nova“ und „bitte“ sowie hinten „bitte“ entfernen.
+Normalisierung: Kleinschreibung, Satzzeichen `.,!?;:„“"'` entfernen, Leerraum zusammenfassen, vorn ein Wake Word und „bitte“ sowie hinten „bitte“ entfernen. Als Wake Word gelten „nova“, „jarvis“ und jedes „hey <Wort>“, weil das Wort in der Nachfrage bei Whisper landet und der Name dort oft verhört wird („Hey, Javas!“). Bleibt danach nichts übrig, ergibt das `Dismiss`: Nova bleibt still und hört weiter zu.
 
 Die Regeln gelten in dieser Reihenfolge, der erste Treffer gewinnt:
 

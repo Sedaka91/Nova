@@ -89,11 +89,21 @@ fn normalize(text: &str) -> String {
         })
         .collect();
     let mut s = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-    for prefix in ["hey nova", "nova", "bitte"] {
-        s = strip_word_prefix(&s, prefix).unwrap_or(&s).to_string();
-    }
+    s = strip_wake_word(&s).to_string();
+    s = strip_word_prefix(&s, "bitte").unwrap_or(&s).to_string();
     s = strip_word_suffix(&s, "bitte").unwrap_or(&s).to_string();
     s
+}
+
+/// Drops a spoken wake word. During the follow-up the wake word helper is paused, so the word
+/// reaches Whisper, which often mishears the name: any "hey <word>" counts.
+fn strip_wake_word(s: &str) -> &str {
+    let (first, rest) = s.split_once(' ').unwrap_or((s, ""));
+    match first {
+        "hey" | "hay" | "hei" | "hi" => rest.split_once(' ').map_or("", |(_, rest)| rest),
+        "nova" | "jarvis" => rest,
+        _ => s,
+    }
 }
 
 /// Strips `word` from the front when it is a whole word.
@@ -260,6 +270,10 @@ fn parse_play_content(s: &str) -> Option<Command> {
 pub fn parse(text: &str) -> Option<Command> {
     let s = normalize(text);
     let s = s.as_str();
+    if s.is_empty() {
+        // Only a wake word or noise: stay quiet instead of saying "I can't do that".
+        return (!text.trim().is_empty()).then_some(Command::Dismiss);
+    }
     match s {
         "stopp" | "stop" => return Some(Command::Dismiss),
         "play" | "spiel weiter" | "spiele weiter" | "musik an" | "musik weiter" | "fortsetzen" => {
@@ -389,6 +403,37 @@ mod tests {
             "",
         ] {
             assert_eq!(parse(text), None, "input: {text}");
+        }
+    }
+
+    // Texts as Whisper delivered them in the follow-up, where the wake word helper is paused.
+    #[test]
+    fn parse_ignores_a_repeated_wake_word() {
+        let search = |term: &str| Some(Search(Engine::YouTube, term.to_string()));
+        for (text, expected) in [
+            (
+                "Hey, Jarvis. Suche bei YouTube nach Katzen.",
+                search("katzen"),
+            ),
+            (
+                "Hey, Javas! Suche bei YouTube nach Katzen.",
+                search("katzen"),
+            ),
+            (
+                "Hay Jarvis, suche bei YouTube nach Katzen.",
+                search("katzen"),
+            ),
+            ("Hey Nova, bitte Pause.", Some(Pause)),
+            ("Jarvis, Pause.", Some(Pause)),
+        ] {
+            assert_eq!(parse(text), expected, "input: {text}");
+        }
+    }
+
+    #[test]
+    fn wake_word_alone_is_dismissed_without_a_sentence() {
+        for text in ["Hey, Jarvis.", "Hey, Javas!", "Hey Nova."] {
+            assert_eq!(parse(text), Some(Dismiss), "input: {text}");
         }
     }
 
