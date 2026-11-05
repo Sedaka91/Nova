@@ -108,6 +108,10 @@ def _listen(microphone: Microphone, detector: WakeDetector, emit: Callable[..., 
     except AudioDeviceError as error:
         emit("error", message=str(error))
         os._exit(1)
+    except Exception as error:
+        log.exception("audio thread failed")
+        emit("error", message=f"Wake-Word-Erkennung fehlgeschlagen: {error}")
+        os._exit(1)
 
 
 def main(argv: list[str] | None = None) -> int:

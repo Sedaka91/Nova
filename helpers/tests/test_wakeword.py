@@ -181,6 +181,28 @@ def test_device_error_while_listening_exits_nonzero() -> None:
     assert out == b'{"event":"ready"}\n{"event":"error","message":"Ger\xc3\xa4t weg"}\n'
 
 
+def test_predict_failure_while_listening_exits_nonzero() -> None:
+    process = start_wakeword(
+        """
+        class Microphone:
+            def __init__(self, node): pass
+            def __enter__(self): return self
+            def __exit__(self, *exc): pass
+            def __iter__(self):
+                yield np.zeros(1280, dtype=np.int16)
+        def broken(block): raise RuntimeError("onnx kaputt")
+        wakeword._load_model = lambda name: (broken, (lambda: None))
+        """
+    )
+
+    assert process.stdin is not None and process.stdout is not None
+    try:
+        assert process.wait(timeout=TIMEOUT_S) == 1  # stdin stays open: only a crash ends it
+    finally:
+        process.kill()
+    assert process.stdout.read().startswith(b'{"event":"ready"}\n{"event":"error"')
+
+
 def test_ready_then_exits_zero_promptly_on_stdin_eof() -> None:
     process = start_wakeword(
         f"""
