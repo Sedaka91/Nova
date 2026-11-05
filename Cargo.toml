@@ -17,6 +17,8 @@ thiserror = "2"
 anyhow = "1"
 ctrlc = "3"
 nix = { version = "0.31", features = ["signal"] }
+ureq = "3"
+percent-encoding = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
