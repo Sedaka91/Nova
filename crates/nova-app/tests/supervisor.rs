@@ -3,7 +3,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -473,22 +472,23 @@ fn barge_in_drops_the_reply() {
 
 #[test]
 fn stale_reply_does_not_answer_the_next_run() {
-    let calls = AtomicUsize::new(0);
-    let executor: Executor = Arc::new(move |_| {
-        if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+    let executor: Executor = Arc::new(|command| match command {
+        Command::Pause => {
             thread::sleep(Duration::from_millis(100));
             Reply::Say("Alt.".into())
-        } else {
+        }
+        Command::Next => {
             thread::sleep(Duration::from_millis(400));
             Reply::Say("Neu.".into())
         }
+        other => panic!("unexpected command {other:?}"),
     });
     let nova = Rig::new("stale-reply").start_executing(NO_WORK_TIMEOUT, executor, &[]);
 
     nova.wake();
     nova.say("Pause.");
     nova.inject(HelperKind::Stt, HelperEvent::SpeechStart);
-    nova.say("Pause.");
+    nova.say("Weiter.");
 
     nova.wait_for(HelperKind::Tts, r#"{"cmd":"speak","id":"3","text":"Neu."}"#);
     assert_eq!(nova.spoken_lines(), 1);
