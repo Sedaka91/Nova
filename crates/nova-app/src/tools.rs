@@ -2,6 +2,7 @@
 
 use std::io::Read;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::time::Duration;
 
 /// Why a child process did not succeed.
@@ -25,12 +26,15 @@ pub fn run(program: &str, args: &[&str]) -> Result<(), ToolError> {
             std::io::ErrorKind::NotFound => ToolError::Missing,
             _ => ToolError::Failed(err.to_string()),
         })?;
-    let mut stderr = String::new();
+    // Read stderr on a detached thread: a launched GUI program may keep the pipe
+    // open long after the child exits, and that must never delay `run`.
+    let (sender, receiver) = mpsc::channel();
     if let Some(mut pipe) = child.stderr.take() {
-        // Lossy read: a non-UTF-8 message is still worth logging.
-        let mut bytes = Vec::new();
-        let _ = pipe.read_to_end(&mut bytes);
-        stderr = String::from_utf8_lossy(&bytes).trim().to_string();
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = pipe.read_to_end(&mut bytes);
+            let _ = sender.send(String::from_utf8_lossy(&bytes).trim().to_string());
+        });
     }
     let status = child
         .wait()
@@ -38,6 +42,9 @@ pub fn run(program: &str, args: &[&str]) -> Result<(), ToolError> {
     if status.success() {
         Ok(())
     } else {
+        let stderr = receiver
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_or_default();
         Err(ToolError::Failed(stderr))
     }
 }
@@ -63,5 +70,20 @@ mod tests {
         ));
         assert!(matches!(run("false", &[]), Err(ToolError::Failed(_))));
         assert!(run("true", &[]).is_ok());
+    }
+
+    #[test]
+    fn run_returns_while_a_background_child_holds_stderr() {
+        let start = std::time::Instant::now();
+        assert!(run("sh", &["-c", "sleep 5 &"]).is_ok());
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn failed_run_keeps_stderr() {
+        match run("sh", &["-c", "echo boom >&2; exit 1"]) {
+            Err(ToolError::Failed(text)) => assert!(text.contains("boom")),
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 }
