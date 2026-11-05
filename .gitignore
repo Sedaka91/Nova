@@ -1,9 +1,12 @@
 /target/
 **/__pycache__/
-helpers/.venv/
+helpers/.venv
 *.log
 # Laufzeitdaten und Modelle gehören nicht ins Repo
 /models/*
 !/models/hey_nova.onnx
 /data/
 .env
+
+# Fremde Skills nicht mitveröffentlichen
+/.claude/skills/
