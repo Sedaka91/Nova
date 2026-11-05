@@ -3,6 +3,7 @@
 helpers/.venv/
 *.log
 # Laufzeitdaten und Modelle gehören nicht ins Repo
-/models/
+/models/*
+!/models/hey_nova.onnx
 /data/
 .env

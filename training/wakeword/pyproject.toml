@@ -1,0 +1,46 @@
+[project]
+name = "nova-wakeword-training"
+version = "0.1.0"
+description = "Einmaliges Training des Wake Words „Hey Nova“ (eigenständig, keine Laufzeitabhängigkeit von Nova)"
+requires-python = "==3.10.*"
+dependencies = [
+    # Pins from openWakeWord's official training notebook.
+    "acoustics==0.2.6",
+    "audiomentations==0.33.0",
+    "mutagen==1.47.0",
+    "piper-phonemize==1.1.0",
+    "pronouncing==0.2.0",
+    "speechbrain==0.5.14",
+    "torch-audiomentations==0.11.0",
+    "torchinfo==1.8.0",
+    "torchmetrics==1.2.0",
+    # torch with its own CUDA runtime, independent of the system CUDA.
+    "torch==2.5.1",
+    "torchaudio==2.5.1",
+    # Required by the openWakeWord and generator sources, unpinned upstream.
+    "numpy<2",
+    "onnx",
+    "onnxruntime",
+    "pyarrow",
+    "pyyaml",
+    "requests",
+    "scikit-learn",
+    "scipy",
+    # pronouncing and speechbrain import pkg_resources.
+    "setuptools<81",
+    "soundfile",
+    "tqdm",
+    "webrtcvad-wheels",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
+torchaudio = { index = "pytorch-cu124" }
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
