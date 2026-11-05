@@ -15,6 +15,20 @@ custom_negative_phrases:
 n_samples: 50000
 n_samples_val: 5000
 
+# Eigene Aufnahmen aus recordings/. excluded: nach dem Abhören aussortiert.
+# held_out: bleibt als persönliche Testmenge außerhalb des Trainings.
+# share: Anteil an n_samples, den die eigenen Takes als Kopien füllen.
+own_takes:
+  seed: 1
+  positive:
+    excluded: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]  # nur Tastenklick
+    held_out: 10
+    share: 0.25
+  negative:
+    excluded: [4, 19]
+    held_out: 6
+    share: 0.10
+
 tts_batch_size: 50
 augmentation_batch_size: 16
 

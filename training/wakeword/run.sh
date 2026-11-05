@@ -6,6 +6,7 @@
 #   ./run.sh train   setup, then the full run in the foreground
 #   ./run.sh start   ./run.sh train fully detached, log in out/train.log,
 #                    marker out/DONE or out/FAILED holds the exit code
+#   ./run.sh test [model.onnx]   scores the held-out takes and background audio
 set -euo pipefail
 
 PROJECT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -13,9 +14,7 @@ CACHE=${NOVA_TRAINING_CACHE:-$HOME/.cache/nova-training}
 OWW_MODELS=$HOME/.local/share/nova/openwakeword
 
 OPENWAKEWORD_COMMIT=368c03716d1e92591906a84949bc477f3a834455
-# Last generator commit with everything needed here: the module layout train.py
-# imports, 16 kHz output, the German voice's JSON and min_phoneme_count (v2.0.0
-# lacks the latter two, v3.x writes 22.05 kHz and dropped min_phoneme_count).
+# Has the module layout train.py imports and writes 16 kHz (v3.x writes 22.05 kHz).
 PIPER_GENERATOR_COMMIT=9c1019c932eda098aa70d63cdeac803dea983f53
 VOICE_URL=https://github.com/rhasspy/piper-sample-generator/releases/download/v2.0.0
 HF=https://huggingface.co/datasets
@@ -66,7 +65,6 @@ setup_project() {
 
     local generator=$CACHE/repos/piper-sample-generator
     clone https://github.com/rhasspy/piper-sample-generator "$generator" "$PIPER_GENERATOR_COMMIT"
-    fetch "$VOICE_URL/de_DE-mls-medium.pt" "$generator/models/de_DE-mls-medium.pt"
     fetch "$VOICE_URL/en_US-libritts_r-medium.pt" "$generator/models/en_US-libritts_r-medium.pt"
 }
 
@@ -111,6 +109,8 @@ train_with() { # config, relative to the cache
 run_training() { # config output_dir
     cd "$CACHE"
     local features_complete=$2/.features_complete overwrite=()
+    # First, so that train.py counts the takes and generates only the rest.
+    "$PYTHON" -I "$CACHE/scripts/prepare_takes.py" "$1"
     train_with "$1" --generate_clips
     # train.py skips augmentation when a feature file exists, even a half-written one.
     [[ -e $features_complete ]] || overwrite=(--overwrite)
@@ -127,12 +127,6 @@ smoke() {
         -e 's|^output_dir: .*|output_dir: "./out-smoke"|' \
         "$PROJECT_DIR/hey_nova.yml" >"$config"
     run_training "$config" "$CACHE/out-smoke/hey_nova"
-
-    mkdir -p "$PROJECT_DIR/samples"
-    for voice in de en; do
-        find "$CACHE/out-smoke/hey_nova/positive_train" -name "${voice}_*.wav" \
-            | sort | sed -n 1,3p | xargs -I{} cp {} "$PROJECT_DIR/samples/"
-    done
 }
 
 # Written into the cache so that the scripts never sit next to downloaded material.
@@ -150,10 +144,189 @@ for batch in pq.ParquetFile(source).iter_batches(columns=["audio"], batch_size=6
     for audio in batch.column("audio").to_pylist():
         Path(target, Path(audio["path"]).name).write_bytes(audio["bytes"])
 PY
+    cat >"$CACHE/scripts/prepare_takes.py" <<'PY'
+"""Trims the recorded takes, holds some out and adds the rest to train.py's clip folders.
+
+Runs in the cache directory. The clips of train.py are short and end right after
+the speech, augment_clips then places that end 0 to 200 ms before the end of the
+clip. Trimmed takes get the same treatment. Each folder entry is augmented on its
+own, so hard links to the same take turn into differing training examples.
+"""
+import random
+import shutil
+import sys
+from pathlib import Path
+
+import numpy as np
+import soundfile as sf
+import yaml
+
+FRAME = 320  # 20 ms at 16 kHz
+GATE_DB = 30  # below the loudest frame
+MIN_SPEECH_FRAMES = 5  # shorter bursts are key clicks and breath
+MAX_GAP_FRAMES = 20  # the pause between "hey" and "nova" can reach 360 ms
+# Silence around the speech, as in the synthetic clips.
+LEAD_SAMPLES = 800
+TAIL_SAMPLES = 1600
+SESSION_EDGE = 2  # takes at each end of a session that are never held out
+
+
+def speech_frames(samples, path):
+    """Returns the first and the end frame of the longest stretch of speech."""
+    n_frames = len(samples) // FRAME
+    frames = samples[: n_frames * FRAME].reshape(n_frames, FRAME).astype(np.float64)
+    power = (frames**2).mean(axis=1)
+    active = np.flatnonzero(power > power.max() * 10 ** (-GATE_DB / 10))
+    runs = np.split(active, np.flatnonzero(np.diff(active) > 1) + 1)
+    spans = []
+    for run in runs:
+        if len(run) < MIN_SPEECH_FRAMES:
+            continue
+        if spans and run[0] - spans[-1][1] <= MAX_GAP_FRAMES:
+            spans[-1][1] = run[-1] + 1
+        else:
+            spans.append([run[0], run[-1] + 1])
+    if not spans:
+        sys.exit(f"{path}: keine Sprache gefunden, Take in hey_nova.yml ausschließen")
+    return max(spans, key=lambda span: span[1] - span[0])
+
+
+def trim(source, target):
+    samples, rate = sf.read(source, dtype="int16")
+    first, end = speech_frames(samples, source)
+    start = max(0, first * FRAME - LEAD_SAMPLES)
+    sf.write(target, samples[start : end * FRAME + TAIL_SAMPLES], rate, subtype="PCM_16")
+
+
+def held_out(numbers, count, rng):
+    """Picks one take from each of count equal stretches of the session."""
+    return {int(rng.choice(list(part))) for part in np.array_split(numbers[SESSION_EDGE:-SESSION_EDGE], count)}
+
+
+config = yaml.safe_load(Path(sys.argv[1]).read_text())
+own = config["own_takes"]
+rng = random.Random(own["seed"])
+shutil.rmtree("takes", ignore_errors=True)
+
+for kind in ("positive", "negative"):
+    recordings = Path("recordings", kind)
+    train_dir = Path("takes", kind, "train")
+    test_dir = Path("takes", kind, "test")
+    train_dir.mkdir(parents=True)
+    test_dir.mkdir()
+    excluded = set(own[kind]["excluded"])
+    numbers = sorted(int(p.stem.removeprefix("take_")) for p in recordings.glob("take_*.wav"))
+    numbers = [number for number in numbers if number not in excluded]
+    test = held_out(numbers, own[kind]["held_out"], rng)
+
+    trimmed = []
+    for number in numbers:
+        name = f"take_{number:03d}.wav"
+        if number in test:
+            # Tests hear the unprocessed recording, like the microphone stream.
+            shutil.copy(recordings / name, test_dir / name)
+        else:
+            trim(recordings / name, train_dir / name)
+            trimmed.append(train_dir / name)
+
+    clips = Path(config["output_dir"], config["model_name"], f"{kind}_train")
+    clips.mkdir(parents=True, exist_ok=True)
+    for clip in clips.glob("own_*.wav"):
+        clip.unlink()
+    n_copies = round(own[kind]["share"] * config["n_samples"])
+    for copy in range(n_copies):
+        take = trimmed[copy % len(trimmed)]
+        (clips / f"own_{take.stem}_{copy}.wav").hardlink_to(take)
+    print(f"{kind}: {len(trimmed)} Takes als {n_copies} Clips, zurückgehalten: {sorted(test)}")
+PY
+    cat >"$CACHE/scripts/test_takes.py" <<'PY'
+"""Scores the held-out takes and background audio at Nova's threshold."""
+import random
+import sys
+import wave
+from pathlib import Path
+
+import numpy as np
+from openwakeword.model import Model
+
+THRESHOLD = 0.5
+BLOCK = 1280  # 80 ms
+LOCKOUT_BLOCKS = 12  # Nova ignores further activations for 1 s
+SAMPLE_RATE = 16000
+BACKGROUND_SECONDS = 60
+SEED = 1
+# The model needs its context window of 1.28 s and ignores its first blocks.
+LEAD = np.zeros(2 * SAMPLE_RATE, dtype=np.int16)
+TAIL = np.zeros(SAMPLE_RATE, dtype=np.int16)
+
+
+def read_wav(path):
+    with wave.open(str(path)) as file:
+        return np.frombuffer(file.readframes(file.getnframes()), dtype=np.int16)
+
+
+def scores(model, samples):
+    model.reset()
+    blocks = [samples[i : i + BLOCK] for i in range(0, len(samples) - BLOCK + 1, BLOCK)]
+    return [float(max(model.predict(block).values())) for block in blocks]
+
+
+def activations(block_scores):
+    count = 0
+    locked_until = 0
+    for index, score in enumerate(block_scores):
+        if score >= THRESHOLD and index >= locked_until:
+            count += 1
+            locked_until = index + LOCKOUT_BLOCKS
+    return count
+
+
+def score_takes(model, directory, label):
+    """Prints each take's peak score and returns how many reached the threshold."""
+    reached = 0
+    for path in sorted(directory.glob("*.wav")):
+        peak = max(scores(model, np.concatenate([LEAD, read_wav(path), TAIL])))
+        hit = peak >= THRESHOLD
+        reached += hit
+        print(f"{label} {path.stem}  Spitze {peak:.3f}  {'ausgelöst' if hit else '-'}")
+    return reached
+
+
+def background(data):
+    paths = sorted([*(data / "audioset_16k").glob("*.wav"), *(data / "fma_16k").glob("*.wav")])
+    random.Random(SEED).shuffle(paths)
+    parts = []
+    for path in paths:
+        parts.append(read_wav(path))
+        if sum(map(len, parts)) >= BACKGROUND_SECONDS * SAMPLE_RATE:
+            break
+    return np.concatenate(parts)[: BACKGROUND_SECONDS * SAMPLE_RATE]
+
+
+model_path, feature_models, cache = sys.argv[1:]
+model = Model(
+    wakeword_models=[model_path],
+    inference_framework="onnx",
+    melspec_model_path=f"{feature_models}/melspectrogram.onnx",
+    embedding_model_path=f"{feature_models}/embedding_model.onnx",
+)
+positive_dir = Path(cache, "takes/positive/test")
+negative_dir = Path(cache, "takes/negative/test")
+hits = score_takes(model, positive_dir, "positiv")
+false_takes = score_takes(model, negative_dir, "negativ")
+background_scores = scores(model, background(Path(cache, "data")))
+false_background = activations(background_scores)
+
+n_positive = len(list(positive_dir.glob("*.wav")))
+n_negative = len(list(negative_dir.glob("*.wav")))
+print(f"Hintergrund {BACKGROUND_SECONDS} s  Spitze {max(background_scores):.3f}")
+print(f"Schwelle {THRESHOLD}")
+print(f"Recall {hits}/{n_positive} = {hits / n_positive:.2f}")
+print(f"Fehlauslösungen: {false_takes}/{n_negative} Negativ-Takes, {false_background} im Hintergrund")
+PY
     cat >"$CACHE/scripts/nova_train.py" <<'PY'
 """Runs openWakeWord's unmodified train.py with the adjustments listed in README.md."""
 import argparse
-import gc
 import importlib.machinery
 import importlib.util
 import os
@@ -171,24 +344,6 @@ import yaml
 CACHE = Path.cwd()
 OPENWAKEWORD = CACHE / "repos/openwakeword"
 GENERATOR = CACHE / "repos/piper-sample-generator"
-VOICES = {
-    "de": str(GENERATOR / "models/de_DE-mls-medium.pt"),
-    "en": str(GENERATOR / "models/en_US-libritts_r-medium.pt"),
-}
-# The MLS-trained German voice babbles on short phrases. The generator's README
-# prescribes repeating the phrase, keeping one repetition and lowering the noise.
-# These inputs are long, hence the small batch. The generator's automatic batch
-# reduction fails together with min_phoneme_count.
-VOICE_SETTINGS = {
-    "de": {
-        "min_phoneme_count": 300,
-        "noise_scales": [0.333],
-        "noise_scale_ws": [0.333],
-        "batch_size": 4,
-        "auto_reduce_batch_size": False,
-    },
-    "en": {},
-}
 VRAM_RESERVE = int(1.5 * 1024**3)
 VRAM_REQUIRED = 3 * 1024**3
 VALIDATION_BATCH = 65536
@@ -209,37 +364,14 @@ class TfliteSkipped(Exception):
     """train.py reached the TFLite conversion, which Nova does not need."""
 
 
-def spelled_for(voice, text):
-    """Spells a text so that espeak gets the intended sound from each voice."""
-    if voice == "de":
-        # German espeak reads "hey" as "Hai". The comma belongs to the repetition fix.
-        return re.sub(r"\bhey\b", "hay", text) + ","
-    # English espeak drops the v in "nowa", which is only meant for German speakers.
-    return re.sub(r"\bnowa\b", "nova", text)
+def generate_english(text, max_samples, output_dir, generate=generator.generate_samples, **kwargs):
+    """Generates with the default voice, in unique files that a restart adds to.
 
-
-def generate_both_voices(text, max_samples, output_dir, generate=generator.generate_samples, **kwargs):
-    """Splits a request evenly between the voices, counting clips of earlier runs."""
-    kwargs.pop("file_names", None)
-
-    def clips_of(voice):
-        return len(list(Path(output_dir).glob(f"{voice}_*.wav")))
-
-    per_voice = (max_samples + sum(map(clips_of, VOICES))) // len(VOICES)
-    for voice, model in VOICES.items():
-        settings = {**kwargs, **VOICE_SETTINGS[voice]}
-        while (missing := per_voice - clips_of(voice)) > 0:
-            # Without unique names the voices would overwrite each other's numbered clips.
-            names = [f"{voice}_{uuid.uuid4().hex}.wav" for _ in range(missing)]
-            texts = [spelled_for(voice, t) for t in random.sample(text, len(text))]
-            try:
-                generate(texts, output_dir, model=model, max_samples=missing, file_names=names, **settings)
-            except torch.cuda.OutOfMemoryError:
-                # Finished clips are on disk, the next round continues from there.
-                if per_voice - clips_of(voice) == missing:
-                    raise
-            gc.collect()
-            torch.cuda.empty_cache()
+    English espeak drops the v in "nowa", which is only meant for German speakers.
+    """
+    kwargs["file_names"] = [f"{uuid.uuid4().hex}.wav" for _ in range(max_samples)]
+    texts = [re.sub(r"\bnowa\b", "nova", t) for t in random.sample(text, len(text))]
+    generate(texts, output_dir, max_samples=max_samples, **kwargs)
 
 
 def sounds_like_target(text):
@@ -295,6 +427,8 @@ def split_validation_batches(loader=torch.utils.data.DataLoader):
 
 
 def limit_vram():
+    if not torch.cuda.is_available():
+        return  # CUDA_VISIBLE_DEVICES="" runs everything on the CPU, see README.md
     free, total = torch.cuda.mem_get_info()
     if free - VRAM_RESERVE < VRAM_REQUIRED:
         sys.exit(f"Zu wenig freier Grafikspeicher ({free >> 20} MiB). Läuft ein Spiel oder Ollama?")
@@ -306,7 +440,7 @@ parser.add_argument("--training_config", required=True)
 config = yaml.safe_load(Path(parser.parse_known_args()[0].training_config).read_text())
 CUSTOM_NEGATIVES = list(config["custom_negative_phrases"])
 
-generator.generate_samples = generate_both_voices
+generator.generate_samples = generate_english
 openwakeword.data.generate_adversarial_texts = adversarial_texts
 openwakeword.utils.compute_features_from_generator = features_on_cpu
 skip_tflite()
@@ -336,6 +470,11 @@ case ${1:-} in
         download_data
         run_training "$PROJECT_DIR/hey_nova.yml" "$CACHE/out/hey_nova"
         ;;
+    test)
+        write_scripts
+        "$PROJECT_DIR/../../helpers/.venv/bin/python" -I "$CACHE/scripts/test_takes.py" \
+            "${2:-$CACHE/out/hey_nova.onnx}" "$OWW_MODELS" "$CACHE"
+        ;;
     start)
         mkdir -p "$CACHE/out"
         rm -f "$CACHE/out/DONE" "$CACHE/out/FAILED"
@@ -353,7 +492,7 @@ case ${1:-} in
         fi
         ;;
     *)
-        echo "Aufruf: $0 setup|smoke|train|start" >&2
+        echo "Aufruf: $0 setup|smoke|train|start|test [modell.onnx]" >&2
         exit 2
         ;;
 esac
