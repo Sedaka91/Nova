@@ -106,16 +106,30 @@ train_with() { # config, relative to the cache
     "$PYTHON" -I "$CACHE/scripts/nova_train.py" --training_config "$1" "${@:2}"
 }
 
+# Identifies what the features are built from. Run after prepare_takes.py.
+features_fingerprint() { # config
+    {
+        cat "$1"
+        find "$CACHE/takes" -path '*/train/*.wav' -printf '%P\n' | LC_ALL=C sort
+    } | sha256sum | cut -d' ' -f1
+}
+
+features_current() { # marker fingerprint
+    [[ -f $1 && $(<"$1") == "$2" ]]
+}
+
 run_training() { # config output_dir
     cd "$CACHE"
-    local features_complete=$2/.features_complete overwrite=()
+    local features_complete=$2/.features_complete fingerprint overwrite=()
     # First, so that train.py counts the takes and generates only the rest.
     "$PYTHON" -I "$CACHE/scripts/prepare_takes.py" "$1"
+    fingerprint=$(features_fingerprint "$1")
     train_with "$1" --generate_clips
-    # train.py skips augmentation when a feature file exists, even a half-written one.
-    [[ -e $features_complete ]] || overwrite=(--overwrite)
+    # train.py skips augmentation when a feature file exists, even a half-written or
+    # outdated one. An empty marker from an older run counts as outdated.
+    features_current "$features_complete" "$fingerprint" || overwrite=(--overwrite)
     train_with "$1" --augment_clips "${overwrite[@]}"
-    touch "$features_complete"
+    echo "$fingerprint" >"$features_complete"
     train_with "$1" --train_model
 }
 
@@ -471,12 +485,24 @@ case ${1:-} in
         run_training "$PROJECT_DIR/hey_nova.yml" "$CACHE/out/hey_nova"
         ;;
     test)
+        helpers=$(cd "$PROJECT_DIR/../../helpers" && pwd)
+        if [[ ! -x $helpers/.venv/bin/python ]]; then
+            echo "$helpers/.venv fehlt. Zuerst ausführen: cd $helpers && uv sync" >&2
+            exit 1
+        fi
+        mkdir -p "$CACHE/scripts"
         write_scripts
-        "$PROJECT_DIR/../../helpers/.venv/bin/python" -I "$CACHE/scripts/test_takes.py" \
+        "$helpers/.venv/bin/python" -I "$CACHE/scripts/test_takes.py" \
             "${2:-$CACHE/out/hey_nova.onnx}" "$OWW_MODELS" "$CACHE"
         ;;
     start)
         mkdir -p "$CACHE/out"
+        # The detached run inherits descriptor 9 and so holds the lock until it ends.
+        exec 9>"$CACHE/out/.lock"
+        if ! flock -n 9; then
+            echo "Es läuft bereits ein Training, Protokoll: $CACHE/out/train.log" >&2
+            exit 1
+        fi
         rm -f "$CACHE/out/DONE" "$CACHE/out/FAILED"
         setsid nohup nice -n 10 bash "${BASH_SOURCE[0]}" detached \
             >"$CACHE/out/train.log" 2>&1 </dev/null &

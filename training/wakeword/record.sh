@@ -20,14 +20,22 @@ esac
 dir=$HOME/.cache/nova-training/recordings/$kind
 mkdir -p "$dir"
 take=$(find "$dir" -name 'take_*.wav' | wc -l)
+# Numbers continue after the highest take: removed takes leave gaps, the count would overwrite.
+number=0
+last=$(find "$dir" -name 'take_*.wav' -printf '%f\n' | sort -V | tail -n 1)
+if [[ -n $last ]]; then
+    last=${last#take_}
+    number=$((10#${last%.wav} + 1))
+fi
 
 echo "Sprich nach Enter $prompt. Jedes Take dauert $seconds s, q beendet."
 while ((take < total)); do
     read -r -p "[$((take + 1))/$total] Enter oder q: " answer
     [[ $answer == q ]] && break
-    file=$(printf '%s/take_%03d.wav' "$dir" "$take")
+    file=$(printf '%s/take_%03d.wav' "$dir" "$number")
     # timeout ends pw-record with SIGINT so that it finalizes the WAV header.
     timeout --signal=INT "$seconds" pw-record --rate 16000 --channels 1 --format s16 "$file" || true
     take=$((take + 1))
+    number=$((number + 1))
 done
 echo "$take Takes in $dir"

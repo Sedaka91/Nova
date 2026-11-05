@@ -4,7 +4,7 @@ Eigenständiges Trainingsprojekt für `models/hey_nova.onnx`. Nova selbst hängt
 
 ## Voraussetzungen
 
-- `uv`, `git`, `wget`, `curl`, `unzip`, `ffmpeg`, Python 3.10 (von uv).
+- `uv`, `git`, `wget`, `curl`, `unzip`, `ffmpeg`, `flock`, Python 3.10 (von uv).
 - NVIDIA-Grafikkarte. `torch` bringt sein eigenes CUDA mit (cu124), die System-CUDA-Version spielt keine Rolle.
 - Mindestens 40 GB frei auf `/home`, die Grafikkarte nicht von Ollama oder Spielen belegt.
 - Eigene Takes unter `~/.cache/nova-training/recordings/` (`./record.sh positive`, `./record.sh negative`).
@@ -22,9 +22,13 @@ Alles Weitere landet unter `~/.cache/nova-training`, auch die virtuelle Umgebung
 ./run.sh test [modell.onnx]   # persönliche Testmenge, ohne Angabe out/hey_nova.onnx
 ```
 
-`start` schreibt nach `out/train.log` und legt am Ende `out/DONE` oder `out/FAILED` mit dem Exit-Code an. Ergebnis: `out/hey_nova.onnx`.
+`start` schreibt nach `out/train.log` und legt am Ende `out/DONE` oder `out/FAILED` mit dem Exit-Code an. Ergebnis: `out/hey_nova.onnx`. Fehlt der Marker und läuft kein Prozess mehr, ist der Lauf gestorben, etwa durch einen Absturz oder `kill -9`.
+
+Ein zweites `start` bricht mit einer Meldung ab, solange ein Lauf die Sperre `out/.lock` hält, und lässt Protokoll und Marker unangetastet. Ein `train` im Vordergrund nimmt die Sperre nicht.
 
 Alle Befehle lassen sich nach einem Abbruch neu starten: Downloads laufen mit `wget -c` weiter, fehlende Clips werden ergänzt. Abgebrochene Merkmalsberechnung beginnt von vorn, das fertige Training überspringt sie.
+
+`.features_complete` enthält einen Hash aus der Konfiguration und den Namen der Trainings-Takes. Passt er nicht mehr, berechnet der nächste Lauf alle Merkmale neu, auch nach einer reinen Kommentaränderung in `hey_nova.yml`.
 
 Ist die Grafikkarte belegt, läuft der Rauchtest mit `CUDA_VISIBLE_DEVICES= ./run.sh smoke` auf der CPU. Die VRAM-Sperre greift dann nicht, für den vollen Lauf ist das zu langsam.
 
@@ -41,7 +45,7 @@ Die Aufnahmen sind persönliche Sprachdaten. Sie bleiben unter `~/.cache/nova-tr
 
 `augment_clips` behandelt jeden Ordnereintrag für sich: Position, EQ und Verzerrung je Clip, Tonhöhe, Bandsperre, Rauschen, Hintergrund, Pegel und Nachhall je Stapel. So unterscheiden sich die Kopien, ein Augmentierungslauf reicht (`augmentation_rounds: 1`).
 
-`run.sh test` lädt das Modell mit `helpers/.venv` wie Nova selbst (`inference_framework="onnx"`) und spielt jede Aufnahme in 80-ms-Blöcken ein, mit 2 s Stille davor und 1 s danach. Dazu kommen 60 s Hintergrund aus `audioset_16k` und `fma_16k`, Sperrzeit nach einer Auslösung 1 s. Ausgabe bei Schwelle 0,5: Spitzenwert je Take, Recall, Fehlauslösungen.
+`run.sh test` braucht `helpers/.venv`, in einem frischen Worktree also vorher `cd helpers && uv sync`. Es lädt das Modell wie Nova selbst (`inference_framework="onnx"`) und spielt jede Aufnahme in 80-ms-Blöcken ein, mit 2 s Stille davor und 1 s danach. Dazu kommen 60 s Hintergrund aus `audioset_16k` und `fma_16k`, Sperrzeit nach einer Auslösung 1 s. Ausgabe bei Schwelle 0,5: Spitzenwert je Take, Recall, Fehlauslösungen.
 
 ## Abweichungen vom offiziellen Notebook
 
@@ -64,10 +68,6 @@ Die Klone bleiben unverändert. `run.sh` legt dafür `scripts/nova_train.py` im 
 | AudioSet `bal_train/09.parquet` statt `bal_train09.tar` | Die Datei wurde im selben Datensatz umgestellt. |
 | FMA small komplett, direkt von `os.unil.cloud.switch.ch` | Das ist die Quelle des Notebook-Datensatzes, dessen Ladeskript aktuelle `datasets` nicht mehr ausführen. Das Notebook nimmt nur 1 Stunde und empfiehlt mehr. |
 
-## Ergebnis
-
-Wird nach dem vollen Lauf ergänzt.
-
 ## Ergebnis (5. November 2026)
 
 Trainingsdauer rund 30 Minuten auf der RTX 3060 Ti mit 50.000 Positivbeispielen und 50.000 Schritten.
@@ -80,4 +80,4 @@ Trainingsdauer rund 30 Minuten auf der RTX 3060 Ti mit 50.000 Positivbeispielen 
 | Eigene Negativ-Takes, Schwelle 0,5 | 0 von 6 ausgelöst |
 | Hintergrund, 60 s | 0 ausgelöst, Spitze 0,002 |
 
-Die Werte der eigenen Takes sind aus `run.sh test`. Zehn Takes sind eine kleine Stichprobe; die Abnahme am Gerät ist maßgeblich.
+Die Werte der eigenen Takes sind aus `run.sh test`. Zehn Takes sind eine kleine Stichprobe; die Abnahme am Gerät ist maßgeblich. Die 60 s Hintergrund stammen aus denselben Ordnern, aus denen das Training seinen Hintergrund mischt. Sie sind also kein unabhängiges Maß für Fehlauslösungen.
