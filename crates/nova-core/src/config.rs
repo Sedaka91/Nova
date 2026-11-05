@@ -205,6 +205,12 @@ impl Config {
                 "router.konfidenz_schwelle must be 0.0..=1.0".into(),
             ));
         }
+        let url = &self.modelle.ollama_url;
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            return Err(ConfigError::Invalid(
+                "modelle.ollama_url must start with http:// or https://".into(),
+            ));
+        }
         if self.lernen.min_wiederholungen == 0 {
             return Err(ConfigError::Invalid(
                 "lernen.min_wiederholungen must be at least 1".into(),
@@ -266,6 +272,14 @@ mod tests {
     #[test]
     fn rejects_zero_follow_up() {
         assert_invalid("nachfrage_s = 8.0", "nachfrage_s = 0.0");
+    }
+
+    #[test]
+    fn rejects_ollama_url_without_scheme() {
+        assert_invalid(
+            "ollama_url = \"http://127.0.0.1:11434\"",
+            "ollama_url = \"127.0.0.1:11434\"",
+        );
     }
 
     #[test]
