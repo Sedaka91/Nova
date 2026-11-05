@@ -17,10 +17,12 @@ use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_perc
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+use crate::commands::{ContentKind, Reply};
 use crate::{secrets, tools};
 
 const AUTHORIZE_URL: &str = "https://accounts.spotify.com/authorize";
 const TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
+const API_URL: &str = "https://api.spotify.com/v1";
 const REDIRECT_URI: &str = "http://127.0.0.1:8898/callback";
 const LISTEN_ADDRESS: &str = "127.0.0.1:8898";
 const CALLBACK_PATH: &str = "/callback";
@@ -347,6 +349,189 @@ fn random_token() -> anyhow::Result<String> {
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
+/// What to start playing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Target {
+    /// An artist, album or playlist, played through `context_uri`.
+    Context { uri: String, name: String },
+    /// A single track, played through `uris`.
+    Track { uri: String, name: String },
+}
+
+/// `(uri, name)` of each entry in `container["items"]`; Spotify also sends `null` entries.
+fn items(container: &serde_json::Value) -> impl Iterator<Item = (String, String)> + '_ {
+    container["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            Some((
+                item["uri"].as_str()?.to_string(),
+                item["name"].as_str()?.to_string(),
+            ))
+        })
+}
+
+fn parse(json: &str) -> serde_json::Value {
+    serde_json::from_str(json).unwrap_or_default()
+}
+
+/// Id of the active device, else the first one.
+pub fn pick_device(json: &str) -> Option<String> {
+    let json = parse(json);
+    let devices = json["devices"].as_array()?;
+    let id = |device: &serde_json::Value| device["id"].as_str().map(str::to_string);
+    devices
+        .iter()
+        .find(|device| device["is_active"].as_bool() == Some(true))
+        .and_then(id)
+        .or_else(|| devices.first().and_then(id))
+}
+
+/// Artist if its name equals `query` ignoring case, else the first track.
+pub fn pick_any(json: &str, query: &str) -> Option<Target> {
+    let json = parse(json);
+    if let Some((uri, name)) = items(&json["artists"]).next()
+        && name.to_lowercase() == query.to_lowercase()
+    {
+        return Some(Target::Context { uri, name });
+    }
+    let (uri, name) = items(&json["tracks"]).next()?;
+    Some(Target::Track { uri, name })
+}
+
+/// First of the user's playlists whose name contains `query` ignoring case.
+pub fn pick_playlist(json: &str, query: &str) -> Option<Target> {
+    let query = query.to_lowercase();
+    let (uri, name) = items(&parse(json)).find(|(_, name)| name.to_lowercase().contains(&query))?;
+    Some(Target::Context { uri, name })
+}
+
+/// First search hit for `kind`; `Any` has its own rule in [`pick_any`].
+pub fn pick_first(json: &str, kind: ContentKind) -> Option<Target> {
+    let json = parse(json);
+    match kind {
+        ContentKind::Any => None,
+        ContentKind::Playlist => {
+            let (uri, name) = items(&json["playlists"]).next()?;
+            Some(Target::Context { uri, name })
+        }
+        ContentKind::Album => {
+            let (uri, name) = items(&json["albums"]).next()?;
+            Some(Target::Context { uri, name })
+        }
+        ContentKind::Track => {
+            let (uri, name) = items(&json["tracks"]).next()?;
+            Some(Target::Track { uri, name })
+        }
+    }
+}
+
+/// Body of `PUT /me/player/play`.
+pub fn play_body(target: &Target) -> serde_json::Value {
+    match target {
+        Target::Context { uri, .. } => serde_json::json!({ "context_uri": uri }),
+        Target::Track { uri, .. } => serde_json::json!({ "uris": [uri] }),
+    }
+}
+
+/// The spoken sentence for the outcome of [`play`].
+pub fn reply_for(result: Result<String, SpotifyError>) -> Reply {
+    Reply::Say(match result {
+        Ok(name) => format!("Ich spiele {name}."),
+        Err(SpotifyError::NotLoggedIn) => "Spotify ist noch nicht angemeldet.".into(),
+        Err(SpotifyError::NoDevice) => "Spotify läuft gerade nicht.".into(),
+        Err(SpotifyError::NotFound) => "Dazu habe ich auf Spotify nichts gefunden.".into(),
+        Err(SpotifyError::Unreachable) => "Spotify ist gerade nicht erreichbar.".into(),
+    })
+}
+
+/// Search Spotify for `query` and start playing the best hit on the user's device.
+pub fn play(kind: ContentKind, query: &str) -> Reply {
+    reply_for(start_playback(kind, query))
+}
+
+/// Name of the content that started playing.
+fn start_playback(kind: ContentKind, query: &str) -> Result<String, SpotifyError> {
+    let token = access_token()?;
+    let device = pick_device(&api_get(&token, &format!("{API_URL}/me/player/devices"))?)
+        .ok_or(SpotifyError::NoDevice)?;
+    let target = find_target(&token, kind, query)?;
+    let name = match &target {
+        Target::Context { name, .. } | Target::Track { name, .. } => name.clone(),
+    };
+    let url = format!(
+        "{API_URL}/me/player/play?device_id={}",
+        utf8_percent_encode(&device, QUERY_VALUE)
+    );
+    let mut response = tools::http_agent()
+        .put(&url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Content-Type", "application/json")
+        .send(play_body(&target).to_string())
+        .map_err(|err| {
+            tracing::warn!(%err, "Spotify play request failed");
+            SpotifyError::Unreachable
+        })?;
+    check_status(response.status().as_u16())?;
+    // The answer is an empty 204; drain it so the connection ends cleanly.
+    let _ = response.body_mut().read_to_string();
+    Ok(name)
+}
+
+fn find_target(token: &str, kind: ContentKind, query: &str) -> Result<Target, SpotifyError> {
+    let search = |types: &str| {
+        api_get(
+            token,
+            &format!(
+                "{API_URL}/search?type={types}&limit=1&q={}",
+                utf8_percent_encode(query, QUERY_VALUE)
+            ),
+        )
+    };
+    let target = match kind {
+        ContentKind::Any => pick_any(&search("artist,track")?, query),
+        ContentKind::Playlist => {
+            let mine = api_get(token, &format!("{API_URL}/me/playlists?limit=50"))?;
+            match pick_playlist(&mine, query) {
+                Some(found) => Some(found),
+                None => pick_first(&search("playlist")?, kind),
+            }
+        }
+        ContentKind::Album => pick_first(&search("album")?, kind),
+        ContentKind::Track => pick_first(&search("track")?, kind),
+    };
+    target.ok_or(SpotifyError::NotFound)
+}
+
+/// 401 means the login is gone, anything else outside 2xx is a Spotify problem.
+fn check_status(status: u16) -> Result<(), SpotifyError> {
+    match status {
+        200..=299 => Ok(()),
+        401 => Err(SpotifyError::NotLoggedIn),
+        _ => {
+            tracing::warn!(status, "Spotify API returned an error");
+            Err(SpotifyError::Unreachable)
+        }
+    }
+}
+
+fn api_get(token: &str, url: &str) -> Result<String, SpotifyError> {
+    let mut response = tools::http_agent()
+        .get(url)
+        .header("Authorization", format!("Bearer {token}"))
+        .call()
+        .map_err(|err| {
+            tracing::warn!(%err, "Spotify API request failed");
+            SpotifyError::Unreachable
+        })?;
+    check_status(response.status().as_u16())?;
+    response.body_mut().read_to_string().map_err(|err| {
+        tracing::warn!(%err, "Spotify API response unreadable");
+        SpotifyError::Unreachable
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -532,5 +717,139 @@ mod tests {
                 .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
         );
         assert_ne!(first, random_token().unwrap());
+    }
+
+    fn ctx(uri: &str, name: &str) -> Target {
+        Target::Context {
+            uri: uri.into(),
+            name: name.into(),
+        }
+    }
+
+    const BOTH: &str = r#"{
+        "artists":{"items":[{"uri":"spotify:artist:1","name":"Daft Punk"}]},
+        "tracks":{"items":[{"uri":"spotify:track:2","name":"Around the World"}]}}"#;
+
+    #[test]
+    fn active_device_wins() {
+        let json = r#"{"devices":[{"id":"a","is_active":false},{"id":"b","is_active":true}]}"#;
+        assert_eq!(pick_device(json), Some("b".into()));
+    }
+
+    #[test]
+    fn first_device_without_active_one() {
+        let json = r#"{"devices":[{"id":"a","is_active":false}]}"#;
+        assert_eq!(pick_device(json), Some("a".into()));
+    }
+
+    #[test]
+    fn no_devices_yield_none() {
+        assert_eq!(pick_device(r#"{"devices":[]}"#), None);
+        assert_eq!(pick_device("kein JSON"), None);
+    }
+
+    #[test]
+    fn any_prefers_the_artist_with_the_same_name() {
+        assert_eq!(
+            pick_any(BOTH, "daft punk"),
+            Some(ctx("spotify:artist:1", "Daft Punk"))
+        );
+    }
+
+    #[test]
+    fn any_falls_back_to_the_track() {
+        assert_eq!(
+            pick_any(BOTH, "around the world"),
+            Some(Target::Track {
+                uri: "spotify:track:2".into(),
+                name: "Around the World".into()
+            })
+        );
+    }
+
+    #[test]
+    fn any_without_hits_yields_none() {
+        assert_eq!(
+            pick_any(r#"{"artists":{"items":[]},"tracks":{"items":[]}}"#, "x"),
+            None
+        );
+    }
+
+    const MINE: &str =
+        r#"{"items":[null,{"uri":"u1","name":"Mein Sport"},{"uri":"u2","name":"Ruhe"}]}"#;
+
+    #[test]
+    fn playlist_name_contains_the_query() {
+        assert_eq!(pick_playlist(MINE, "sport"), Some(ctx("u1", "Mein Sport")));
+    }
+
+    #[test]
+    fn playlist_without_match_yields_none() {
+        assert_eq!(pick_playlist(MINE, "jazz"), None);
+    }
+
+    #[test]
+    fn first_skips_null_items() {
+        assert_eq!(
+            pick_first(
+                r#"{"playlists":{"items":[null,{"uri":"u","name":"n"}]}}"#,
+                ContentKind::Playlist
+            ),
+            Some(ctx("u", "n"))
+        );
+    }
+
+    #[test]
+    fn first_reads_the_section_of_its_kind() {
+        let json = r#"{"albums":{"items":[{"uri":"a","name":"A"}]},"tracks":{"items":[{"uri":"t","name":"T"}]}}"#;
+        assert_eq!(pick_first(json, ContentKind::Album), Some(ctx("a", "A")));
+        assert_eq!(
+            pick_first(json, ContentKind::Track),
+            Some(Target::Track {
+                uri: "t".into(),
+                name: "T".into()
+            })
+        );
+        assert_eq!(pick_first("{}", ContentKind::Track), None);
+    }
+
+    #[test]
+    fn play_bodies() {
+        assert_eq!(
+            play_body(&ctx("u", "n")),
+            serde_json::json!({"context_uri": "u"})
+        );
+        assert_eq!(
+            play_body(&Target::Track {
+                uri: "u".into(),
+                name: "n".into()
+            }),
+            serde_json::json!({"uris": ["u"]})
+        );
+    }
+
+    #[test]
+    fn replies_are_the_spec_sentences() {
+        let say = |text: &str| Reply::Say(text.into());
+        assert_eq!(
+            reply_for(Ok("Daft Punk".into())),
+            say("Ich spiele Daft Punk.")
+        );
+        assert_eq!(
+            reply_for(Err(SpotifyError::NotLoggedIn)),
+            say("Spotify ist noch nicht angemeldet.")
+        );
+        assert_eq!(
+            reply_for(Err(SpotifyError::NoDevice)),
+            say("Spotify läuft gerade nicht.")
+        );
+        assert_eq!(
+            reply_for(Err(SpotifyError::NotFound)),
+            say("Dazu habe ich auf Spotify nichts gefunden.")
+        );
+        assert_eq!(
+            reply_for(Err(SpotifyError::Unreachable)),
+            say("Spotify ist gerade nicht erreichbar.")
+        );
     }
 }
