@@ -193,8 +193,9 @@ fn request_tokens(form: &[(&str, &str)]) -> Result<Tokens, SpotifyError> {
 ///
 /// # Errors
 ///
-/// [`SpotifyError::NotLoggedIn`] without usable entries in KWallet or after a revoked
-/// grant, [`SpotifyError::Unreachable`] when the token request fails.
+/// [`SpotifyError::NotLoggedIn`] when an entry is missing in KWallet or the grant was
+/// revoked, [`SpotifyError::Unreachable`] when KWallet cannot be read, for example while
+/// locked, or the token request fails.
 pub fn access_token() -> Result<String, SpotifyError> {
     let client_id = stored(CLIENT_ID_ACCOUNT)?;
     let refresh_token = stored(REFRESH_TOKEN_ACCOUNT)?;
@@ -206,17 +207,25 @@ pub fn access_token() -> Result<String, SpotifyError> {
     if let Some(new_token) = tokens.refresh
         && let Err(err) = secrets::store(REFRESH_TOKEN_ACCOUNT, &new_token)
     {
-        tracing::warn!(%err, "storing the new Spotify refresh token failed");
+        tracing::warn!(err = %format_args!("{err:#}"), "storing the new Spotify refresh token failed");
     }
     Ok(tokens.access)
 }
 
+/// A failed read says nothing about the login, only that KWallet did not answer.
+fn stored_value(read: anyhow::Result<Option<String>>) -> Result<String, SpotifyError> {
+    match read {
+        Ok(Some(value)) => Ok(value),
+        Ok(None) => Err(SpotifyError::NotLoggedIn),
+        Err(_) => Err(SpotifyError::Unreachable),
+    }
+}
+
 fn stored(account: &str) -> Result<String, SpotifyError> {
-    secrets::read(account)
-        .inspect_err(|err| tracing::warn!(%err, account, "reading from KWallet failed"))
-        .ok()
-        .flatten()
-        .ok_or(SpotifyError::NotLoggedIn)
+    let read = secrets::read(account).inspect_err(|err| {
+        tracing::warn!(err = %format_args!("{err:#}"), account, "reading from KWallet failed");
+    });
+    stored_value(read)
 }
 
 /// One-time login in the terminal; stores client id and refresh token in KWallet.
@@ -493,6 +502,24 @@ mod tests {
         let tokens = parse_token(200, r#"{"access_token":"a1b2","refresh_token":"c3d4"}"#).unwrap();
         let text = format!("{tokens:?}");
         assert!(!text.contains("a1b2") && !text.contains("c3d4"), "{text}");
+    }
+
+    #[test]
+    fn stored_value_keeps_a_value() {
+        assert_eq!(stored_value(Ok(Some("v".into()))), Ok("v".into()));
+    }
+
+    #[test]
+    fn missing_entry_means_not_logged_in() {
+        assert_eq!(stored_value(Ok(None)), Err(SpotifyError::NotLoggedIn));
+    }
+
+    #[test]
+    fn failed_read_means_unreachable() {
+        assert_eq!(
+            stored_value(Err(anyhow::anyhow!("wallet locked"))),
+            Err(SpotifyError::Unreachable)
+        );
     }
 
     #[test]
