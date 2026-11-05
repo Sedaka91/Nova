@@ -67,3 +67,17 @@ Die Klone bleiben unverändert. `run.sh` legt dafür `scripts/nova_train.py` im 
 ## Ergebnis
 
 Wird nach dem vollen Lauf ergänzt.
+
+## Ergebnis (5. November 2026)
+
+Trainingsdauer rund 30 Minuten auf der RTX 3060 Ti mit 50.000 Positivbeispielen und 50.000 Schritten.
+
+| Messung | Wert |
+|---|---|
+| Recall englische Stimme (Trainingslog) | 0,24 |
+| Fehlauslösungen pro Stunde (Trainingslog) | 0,0 |
+| Eigene Test-Takes, Schwelle 0,5 | 8 von 10 |
+| Eigene Negativ-Takes, Schwelle 0,5 | 0 von 6 ausgelöst |
+| Hintergrund, 60 s | 0 ausgelöst, Spitze 0,002 |
+
+Die Werte der eigenen Takes sind aus `run.sh test`. Zehn Takes sind eine kleine Stichprobe; die Abnahme am Gerät ist maßgeblich.
