@@ -2,13 +2,14 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
+use std::thread;
 use std::time::Duration;
 
 use anyhow::Context;
 use nova_app::commands::Context as Commands;
 use nova_app::helper::Incoming;
-use nova_app::spotify;
 use nova_app::supervisor::{self, LoopSettings};
+use nova_app::{ollama, spotify};
 use nova_core::{apps::Apps, config::Config, phrases::Phrases};
 use tracing_subscriber::EnvFilter;
 
@@ -51,6 +52,15 @@ fn main() -> anyhow::Result<()> {
         phrase_sets = phrases.floskel.len(),
         "configuration loaded"
     );
+
+    if !config.modelle.chat_modell.is_empty() {
+        let (url, model) = (
+            config.modelle.ollama_url.clone(),
+            config.modelle.chat_modell.clone(),
+        );
+        // Detached on purpose: a slow or missing model must not delay the voice loop.
+        thread::spawn(move || ollama::warm_up_and_report(&url, &model));
+    }
 
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let specs = supervisor::helper_specs(&config, &root);

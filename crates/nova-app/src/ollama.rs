@@ -9,6 +9,8 @@ use crate::tools;
 
 /// Below the 20 s work deadline of the voice loop, so a stalled Ollama gets its own sentence.
 pub const CHAT_TIMEOUT: Duration = Duration::from_secs(15);
+/// A cold load of the model may take a while; it runs in the background.
+const WARM_UP_TIMEOUT: Duration = Duration::from_secs(120);
 /// The model stays in VRAM this long after the last request.
 const KEEP_ALIVE: &str = "30m";
 /// Small context keeps the KV cache, the hidden VRAM cost, low.
@@ -107,30 +109,118 @@ fn chat_with_timeout(
     text: &str,
     timeout: Duration,
 ) -> Result<String, OllamaError> {
-    let url = format!("{}/api/chat", base_url.trim_end_matches('/'));
-    let body_text =
-        serde_json::to_string(&chat_body(model, text)).map_err(|_| OllamaError::Other)?;
+    let body = post(base_url, "/api/chat", &chat_body(model, text), timeout)?;
+    parse_chat(&body).map_err(|_| {
+        // A serde error may quote the body, so it stays out of the log.
+        tracing::warn!("Ollama answer is not a chat response");
+        OllamaError::Other
+    })
+}
+
+/// POST `body` to `path` and return the answer text when Ollama said 200.
+fn post(
+    base_url: &str,
+    path: &str,
+    body: &Value,
+    timeout: Duration,
+) -> Result<String, OllamaError> {
+    let url = format!("{}{path}", base_url.trim_end_matches('/'));
+    let body_text = serde_json::to_string(body).map_err(|_| OllamaError::Other)?;
     let mut response = tools::agent_with_timeout(timeout)
         .post(&url)
         .header("Content-Type", "application/json")
         .send(body_text)
         .map_err(|err| classify_transport(&err))?;
     let status = response.status().as_u16();
-    let body = response
+    let text = response
         .body_mut()
         .read_to_string()
         .map_err(|err| classify_transport(&err))?;
     match status {
-        200 => parse_chat(&body).map_err(|_| {
-            // A serde error may quote the body, so it stays out of the log.
-            tracing::warn!("Ollama answer is not a chat response");
-            OllamaError::Other
-        }),
-        404 if body.contains("not found") => Err(OllamaError::ModelMissing),
+        200 => Ok(text),
+        404 if text.contains("not found") => Err(OllamaError::ModelMissing),
         _ => {
             tracing::warn!(status, "Ollama returned an error");
             Err(OllamaError::Other)
         }
+    }
+}
+
+/// Loads `model` into memory without a prompt, so the first question is not slow.
+pub fn warm_up(base_url: &str, model: &str) -> Result<(), OllamaError> {
+    let body = json!({ "model": model, "keep_alive": KEEP_ALIVE });
+    post(base_url, "/api/generate", &body, WARM_UP_TIMEOUT).map(drop)
+}
+
+/// A model Ollama currently keeps in memory, with the bytes that sit in VRAM.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Loaded {
+    pub name: String,
+    pub size: u64,
+    pub size_vram: u64,
+}
+
+impl Loaded {
+    /// Ollama moved part of the model to the CPU, which makes answers slow.
+    pub fn partly_on_cpu(&self) -> bool {
+        self.size_vram < self.size
+    }
+}
+
+#[derive(Deserialize)]
+struct PsResponse {
+    models: Vec<Loaded>,
+}
+
+/// Parse `GET /api/ps`: the models currently loaded.
+pub fn parse_ps(json: &str) -> Result<Vec<Loaded>, serde_json::Error> {
+    serde_json::from_str::<PsResponse>(json).map(|response| response.models)
+}
+
+/// Models Ollama currently keeps in memory.
+pub fn loaded(base_url: &str) -> Result<Vec<Loaded>, OllamaError> {
+    let url = format!("{}/api/ps", base_url.trim_end_matches('/'));
+    let mut response = tools::http_agent()
+        .get(&url)
+        .call()
+        .map_err(|err| classify_transport(&err))?;
+    if response.status().as_u16() != 200 {
+        return Err(OllamaError::Other);
+    }
+    let text = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|err| classify_transport(&err))?;
+    parse_ps(&text).map_err(|_| OllamaError::Other)
+}
+
+/// Startup task: load the model and log how much of it sits in VRAM. Never fails Nova.
+pub fn warm_up_and_report(base_url: &str, model: &str) {
+    if let Err(err) = warm_up(base_url, model) {
+        tracing::warn!(
+            ?err,
+            model,
+            "model warm-up failed; answers may be slow or fail"
+        );
+        return;
+    }
+    match loaded(base_url) {
+        Ok(models) => match models.iter().find(|m| m.name == model) {
+            Some(m) if m.partly_on_cpu() => tracing::warn!(
+                model,
+                size = m.size,
+                size_vram = m.size_vram,
+                "model is only partly in VRAM"
+            ),
+            Some(m) => tracing::info!(
+                model,
+                size = m.size,
+                size_vram = m.size_vram,
+                "model in VRAM"
+            ),
+            None => tracing::warn!(model, "model not listed as loaded"),
+        },
+        Err(err) => tracing::warn!(?err, "could not read the loaded models"),
     }
 }
 
@@ -225,6 +315,54 @@ mod tests {
         });
         let result = chat_with_timeout(&url, "m", "x", Duration::from_millis(300));
         assert_eq!(result, Err(OllamaError::Timeout));
+    }
+
+    #[test]
+    fn parse_ps_reads_loaded_models() {
+        let json = r#"{"models":[{"name":"qwen2.5:3b","model":"qwen2.5:3b","size":2500,
+            "size_vram":2500,"context_length":2048,"expires_at":"2026-11-05T12:00:00Z"}]}"#;
+        let models = parse_ps(json).unwrap();
+        assert_eq!(
+            models,
+            [Loaded {
+                name: "qwen2.5:3b".into(),
+                size: 2500,
+                size_vram: 2500,
+            }]
+        );
+        assert!(!models[0].partly_on_cpu());
+    }
+
+    #[test]
+    fn partial_offload_is_detected() {
+        let models = parse_ps(r#"{"models":[{"name":"m","size":4000,"size_vram":1500}]}"#).unwrap();
+        assert!(models[0].partly_on_cpu());
+    }
+
+    #[test]
+    fn nothing_loaded_is_an_empty_list() {
+        assert_eq!(parse_ps(r#"{"models":[]}"#).unwrap(), []);
+    }
+
+    #[test]
+    fn warm_up_accepts_a_200() {
+        let url = serve_once("200 OK", r#"{"done_reason":"load"}"#);
+        assert_eq!(warm_up(&url, "m"), Ok(()));
+    }
+
+    #[test]
+    fn warm_up_reports_a_missing_model() {
+        let url = serve_once("404 Not Found", r#"{"error":"model \"m\" not found"}"#);
+        assert_eq!(warm_up(&url, "m"), Err(OllamaError::ModelMissing));
+    }
+
+    #[test]
+    fn loaded_reads_the_ps_endpoint() {
+        let url = serve_once(
+            "200 OK",
+            r#"{"models":[{"name":"m","size":10,"size_vram":10}]}"#,
+        );
+        assert_eq!(loaded(&url).unwrap()[0].name, "m");
     }
 
     #[test]
