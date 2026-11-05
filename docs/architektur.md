@@ -32,7 +32,7 @@ Feste Befehle laufen nicht in der Hauptschleife, sondern auf einem eigenen Arbei
 0. ✅ Grundgerüst (Workspace, Konfiguration, Floskeln, Launcher-Eintrag)
 1. Sprachschleife mit Echo-Test (umgesetzt, gemeinsame Abnahme mit Phase 2 offen)
 2. Stufe 1: Musik, Wetter, Apps, Suche (umgesetzt, gemeinsame Abnahme mit Phase 1 offen)
-3. Lokales Modell (Ollama), Router, VRAM messen
+3. Lokales Modell (Ollama): unbekannte Sätze gehen an das Modell, Aufwärmen und VRAM-Protokoll beim Start (umgesetzt, Abnahme am Gerät offen). Die Konfidenz-Schwelle `router.konfidenz_schwelle` wirkt erst mit Stufe 3 in Phase 4.
 4. Claude Code: dauerhafte Sitzung mit Streaming-Eingabe
 5. Charakter und Floskeln (Regler, Sperrliste, Ernst-Modus)
 6. Obsidian Vault (Index, gezieltes Nachladen, Zurückschreiben)

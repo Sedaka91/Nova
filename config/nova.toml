@@ -39,7 +39,7 @@ geraet = "auto"             # cpu | cuda | auto – CPU spart VRAM
 
 [modelle]
 ollama_url = "http://127.0.0.1:11434"
-chat_modell = ""            # Phase 3: Qwen/Llama 3–4 Mrd., 4-Bit
+chat_modell = ""            # Ollama-Modellname, z. B. qwen2.5:3b; leer = Stufe 2 aus
 
 [vault]
 pfad = ""                   # Pfad zum Obsidian Vault
