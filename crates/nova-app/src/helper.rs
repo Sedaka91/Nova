@@ -12,6 +12,7 @@ use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
 use serde::Serialize;
 
+use crate::commands::Reply;
 use crate::protocol::{HelperEvent, HelperKind};
 
 /// How long `stop` waits for a helper to exit after closing its stdin.
@@ -31,6 +32,8 @@ pub struct HelperSpec {
 pub enum Incoming {
     Event(HelperKind, HelperEvent),
     Exited(HelperKind),
+    /// Answer of the worker thread with this run id.
+    Reply(u64, Reply),
     /// Shutdown request (e.g. Ctrl+C); never produced by `Helper` itself.
     Shutdown,
 }

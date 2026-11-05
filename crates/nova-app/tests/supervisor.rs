@@ -2,13 +2,16 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use nova_app::commands::{Command, Reply};
 use nova_app::helper::{HelperSpec, Incoming};
 use nova_app::protocol::{HelperEvent, HelperKind};
-use nova_app::supervisor::{LoopSettings, helper_specs, run};
+use nova_app::supervisor::{Executor, LoopSettings, helper_specs, run};
 use nova_core::config::Config;
 
 /// Generous upper bound for anything that must happen; tests normally take far less.
@@ -17,11 +20,41 @@ const POLL: Duration = Duration::from_millis(10);
 const FOLLOW_UP: Duration = Duration::from_millis(200);
 /// Long enough for a wrongly armed deadline to fire.
 const SEVERAL_FOLLOW_UPS: Duration = Duration::from_millis(800);
+/// For a worker that must not time out.
+const NO_WORK_TIMEOUT: Duration = WAIT;
+const WORK_TIMEOUT: Duration = Duration::from_millis(100);
 
 const HELLO_SCRIPT: &str = r#"{"auf_befehl":{"listen":[
     {"event":"speech_start"},{"event":"final","text":"Hallo"}]}}"#;
 const SPEAK_SCRIPT: &str = r#"{"auf_befehl":{"speak":[
     {"event":"started","id":"1"},{"event":"done","id":"1"}]}}"#;
+
+/// `stt` script that hears `text` right after `listen`.
+fn listen_script(text: &str) -> String {
+    format!(
+        r#"{{"auf_befehl":{{"listen":[
+            {{"event":"speech_start"}},{{"event":"final","text":"{text}"}}]}}}}"#
+    )
+}
+
+fn saying_done() -> Executor {
+    Arc::new(|_| Reply::Say("Erledigt.".into()))
+}
+
+fn saying_done_after(delay: Duration) -> Executor {
+    Arc::new(move |_| {
+        thread::sleep(delay);
+        Reply::Say("Erledigt.".into())
+    })
+}
+
+/// Speaks the app name it was asked to open, which shows the text `parse` saw.
+fn echoing_the_app() -> Executor {
+    Arc::new(|command| match command {
+        Command::OpenApp(name) => Reply::Say(format!("„{name}“")),
+        other => panic!("unexpected command {other:?}"),
+    })
+}
 
 /// Temp directory with the logs and scripts of one test.
 struct Rig {
@@ -86,19 +119,40 @@ impl Rig {
         stt: &[&str],
         tts: &[&str],
     ) -> Running {
+        let settings = LoopSettings {
+            ready_timeout,
+            follow_up: FOLLOW_UP,
+            work_timeout: NO_WORK_TIMEOUT,
+        };
+        self.launch(settings, saying_done(), wakeword, stt, tts)
+    }
+
+    fn start_executing(self, work_timeout: Duration, executor: Executor, stt: &[&str]) -> Running {
+        let settings = LoopSettings {
+            ready_timeout: WAIT,
+            follow_up: FOLLOW_UP,
+            work_timeout,
+        };
+        self.launch(settings, executor, &[], stt, &[])
+    }
+
+    fn launch(
+        self,
+        settings: LoopSettings,
+        executor: Executor,
+        wakeword: &[&str],
+        stt: &[&str],
+        tts: &[&str],
+    ) -> Running {
         let specs = vec![
             self.spec(HelperKind::Wakeword, wakeword),
             self.spec(HelperKind::Stt, stt),
             self.spec(HelperKind::Tts, tts),
         ];
-        let settings = LoopSettings {
-            ready_timeout,
-            follow_up: FOLLOW_UP,
-        };
         let (tx, rx) = mpsc::channel();
         let handle = {
             let tx = tx.clone();
-            thread::spawn(move || run(&specs, &settings, tx, rx))
+            thread::spawn(move || run(&specs, &settings, executor, tx, rx))
         };
         Running {
             dir: self.dir,
@@ -130,6 +184,13 @@ impl Running {
 
     fn count(&self, kind: HelperKind, line: &str) -> usize {
         self.lines(kind).iter().filter(|l| *l == line).count()
+    }
+
+    fn spoken_lines(&self) -> usize {
+        self.lines(HelperKind::Tts)
+            .iter()
+            .filter(|line| line.contains(r#""cmd":"speak""#))
+            .count()
     }
 
     fn wait_for(&self, kind: HelperKind, line: &str) {
@@ -205,8 +266,8 @@ fn error_text(result: anyhow::Result<()>) -> String {
 }
 
 #[test]
-fn full_echo_round_trip() {
-    let rig = Rig::new("echo");
+fn full_round_trip_of_an_unknown_sentence() {
+    let rig = Rig::new("round-trip");
     let stt_script = rig.file("stt.json", HELLO_SCRIPT);
     let tts_script = rig.file("tts.json", SPEAK_SCRIPT);
     let nova = rig.start(&[], &["--script", &stt_script], &["--script", &tts_script]);
@@ -216,7 +277,7 @@ fn full_echo_round_trip() {
     nova.wait_for(HelperKind::Wakeword, r#"{"cmd":"pause"}"#);
     nova.wait_for(
         HelperKind::Tts,
-        r#"{"cmd":"speak","id":"1","text":"Du sagtest: Hallo"}"#,
+        r#"{"cmd":"speak","id":"1","text":"Das kann ich noch nicht."}"#,
     );
     nova.wait_for(HelperKind::Stt, r#"{"cmd":"cancel"}"#);
     nova.wait_for(HelperKind::Wakeword, r#"{"cmd":"resume"}"#);
@@ -226,17 +287,18 @@ fn full_echo_round_trip() {
 #[test]
 fn umlauts_survive_the_round_trip() {
     let rig = Rig::new("umlauts");
-    let stt_script = rig.file(
-        "stt.json",
-        r#"{"auf_befehl":{"listen":[{"event":"final","text":"Größe „Äpfel“"}]}}"#,
+    let stt_script = rig.file("stt.json", &listen_script("Öffne Größe „Äpfel“"));
+    let nova = rig.start_executing(
+        NO_WORK_TIMEOUT,
+        echoing_the_app(),
+        &["--script", &stt_script],
     );
-    let nova = rig.start(&[], &["--script", &stt_script], &[]);
 
     nova.wake();
 
     nova.wait_for(
         HelperKind::Tts,
-        r#"{"cmd":"speak","id":"1","text":"Du sagtest: Größe „Äpfel“"}"#,
+        r#"{"cmd":"speak","id":"2","text":"„größe äpfel“"}"#,
     );
     nova.shut_down().expect("clean shutdown");
 }
@@ -272,7 +334,7 @@ fn barge_in_sends_stop() {
     nova.say("Eins");
     nova.wait_for(
         HelperKind::Tts,
-        r#"{"cmd":"speak","id":"1","text":"Du sagtest: Eins"}"#,
+        r#"{"cmd":"speak","id":"1","text":"Das kann ich noch nicht."}"#,
     );
     nova.inject(HelperKind::Stt, HelperEvent::SpeechStart);
 
@@ -288,14 +350,14 @@ fn late_done_of_a_stopped_utterance_is_ignored() {
     nova.say("Eins");
     nova.wait_for(
         HelperKind::Tts,
-        r#"{"cmd":"speak","id":"1","text":"Du sagtest: Eins"}"#,
+        r#"{"cmd":"speak","id":"1","text":"Das kann ich noch nicht."}"#,
     );
     nova.inject(HelperKind::Stt, HelperEvent::SpeechStart);
     nova.wait_for(HelperKind::Tts, r#"{"cmd":"stop"}"#);
     nova.say("Zwei");
     nova.wait_for(
         HelperKind::Tts,
-        r#"{"cmd":"speak","id":"2","text":"Du sagtest: Zwei"}"#,
+        r#"{"cmd":"speak","id":"2","text":"Das kann ich noch nicht."}"#,
     );
 
     nova.inject(HelperKind::Tts, HelperEvent::Done { id: "1".into() });
@@ -312,25 +374,148 @@ fn late_done_of_a_stopped_utterance_is_ignored() {
 }
 
 #[test]
-fn overlapping_utterances_are_spoken_once_with_both_texts() {
-    let rig = Rig::new("overlap");
-    let tts_script = rig.file("tts.json", SPEAK_SCRIPT);
-    let nova = rig.start(&[], &[], &["--script", &tts_script]);
+fn overlapping_utterances_run_one_command_with_both_texts() {
+    let nova = Rig::new("overlap").start_executing(NO_WORK_TIMEOUT, echoing_the_app(), &[]);
 
     nova.wake();
     nova.inject(HelperKind::Stt, HelperEvent::SpeechStart);
     nova.inject(HelperKind::Stt, HelperEvent::SpeechStart);
-    nova.say("Erster Teil");
-    nova.say("zweiter Teil");
+    nova.say("Öffne");
+    nova.say("Firefox");
 
-    let speak = r#"{"cmd":"speak","id":"1","text":"Du sagtest: Erster Teil zweiter Teil"}"#;
-    nova.wait_for(HelperKind::Tts, speak);
+    nova.wait_for(
+        HelperKind::Tts,
+        r#"{"cmd":"speak","id":"2","text":"„firefox“"}"#,
+    );
+    assert_eq!(nova.spoken_lines(), 1);
+    nova.shut_down().expect("clean shutdown");
+}
+
+#[test]
+fn command_reply_is_spoken() {
+    let rig = Rig::new("reply");
+    let stt_script = rig.file("stt.json", &listen_script("Öffne Firefox."));
+    let nova = rig.start_executing(NO_WORK_TIMEOUT, saying_done(), &["--script", &stt_script]);
+
+    nova.wake();
+
+    nova.wait_for(
+        HelperKind::Tts,
+        r#"{"cmd":"speak","id":"2","text":"Erledigt."}"#,
+    );
+    nova.shut_down().expect("clean shutdown");
+}
+
+#[test]
+fn silent_reply_speaks_nothing() {
+    let rig = Rig::new("silent");
+    let stt_script = rig.file("stt.json", &listen_script("Pause."));
+    let nova = rig.start_executing(
+        NO_WORK_TIMEOUT,
+        Arc::new(|_| Reply::Silent),
+        &["--script", &stt_script],
+    );
+
+    nova.wake();
+
+    nova.wait_for(HelperKind::Stt, r#"{"cmd":"cancel"}"#);
+    nova.wait_for(HelperKind::Wakeword, r#"{"cmd":"resume"}"#);
+    assert_eq!(nova.spoken_lines(), 0);
+    nova.shut_down().expect("clean shutdown");
+}
+
+#[test]
+fn work_deadline_speaks_the_timeout() {
+    let rig = Rig::new("work-deadline");
+    let stt_script = rig.file("stt.json", &listen_script("Öffne Firefox."));
+    let nova = rig.start_executing(
+        WORK_TIMEOUT,
+        saying_done_after(3 * WORK_TIMEOUT),
+        &["--script", &stt_script],
+    );
+
+    nova.wake();
+
+    nova.wait_for(
+        HelperKind::Tts,
+        r#"{"cmd":"speak","id":"2","text":"Das hat zu lange gedauert."}"#,
+    );
+    thread::sleep(SEVERAL_FOLLOW_UPS);
+    assert_eq!(nova.spoken_lines(), 1, "the late reply must stay unspoken");
+    nova.shut_down().expect("clean shutdown");
+}
+
+#[test]
+fn barge_in_drops_the_reply() {
+    let nova = Rig::new("barge-working").start_executing(
+        NO_WORK_TIMEOUT,
+        saying_done_after(Duration::from_millis(300)),
+        &[],
+    );
+
+    nova.wake();
+    nova.say("Öffne Firefox.");
+    nova.inject(HelperKind::Stt, HelperEvent::SpeechStart);
+    thread::sleep(SEVERAL_FOLLOW_UPS);
+    nova.say("Hallo");
+
+    nova.wait_for(
+        HelperKind::Tts,
+        r#"{"cmd":"speak","id":"2","text":"Das kann ich noch nicht."}"#,
+    );
     assert_eq!(
-        nova.lines(HelperKind::Tts)
-            .iter()
-            .filter(|line| line.contains(r#""cmd":"speak""#))
-            .count(),
-        1
+        nova.spoken_lines(),
+        1,
+        "the abandoned reply must stay unspoken"
+    );
+    nova.shut_down().expect("clean shutdown");
+}
+
+#[test]
+fn stale_reply_does_not_answer_the_next_run() {
+    let calls = AtomicUsize::new(0);
+    let executor: Executor = Arc::new(move |_| {
+        if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            thread::sleep(Duration::from_millis(100));
+            Reply::Say("Alt.".into())
+        } else {
+            thread::sleep(Duration::from_millis(400));
+            Reply::Say("Neu.".into())
+        }
+    });
+    let nova = Rig::new("stale-reply").start_executing(NO_WORK_TIMEOUT, executor, &[]);
+
+    nova.wake();
+    nova.say("Pause.");
+    nova.inject(HelperKind::Stt, HelperEvent::SpeechStart);
+    nova.say("Pause.");
+
+    nova.wait_for(HelperKind::Tts, r#"{"cmd":"speak","id":"3","text":"Neu."}"#);
+    assert_eq!(nova.spoken_lines(), 1);
+    nova.shut_down().expect("clean shutdown");
+}
+
+#[test]
+fn panicking_executor_is_caught_by_the_deadline() {
+    let rig = Rig::new("panic");
+    let stt_script = rig.file("stt.json", &listen_script("Öffne Firefox."));
+    let nova = rig.start_executing(
+        WORK_TIMEOUT,
+        Arc::new(|_| panic!("worker failed")),
+        &["--script", &stt_script],
+    );
+
+    nova.wake();
+
+    nova.wait_for(
+        HelperKind::Tts,
+        r#"{"cmd":"speak","id":"2","text":"Das hat zu lange gedauert."}"#,
+    );
+    nova.inject(HelperKind::Tts, HelperEvent::Done { id: "2".into() });
+    nova.say("Hallo");
+    nova.wait_for(
+        HelperKind::Tts,
+        r#"{"cmd":"speak","id":"3","text":"Das kann ich noch nicht."}"#,
     );
     nova.shut_down().expect("clean shutdown");
 }
@@ -354,7 +539,7 @@ fn crashed_helper_restarts_once_and_loop_recovers() {
     nova.say("Wieder da");
     nova.wait_for(
         HelperKind::Tts,
-        r#"{"cmd":"speak","id":"1","text":"Du sagtest: Wieder da"}"#,
+        r#"{"cmd":"speak","id":"1","text":"Das kann ich noch nicht."}"#,
     );
     nova.shut_down().expect("clean shutdown");
 }
@@ -378,7 +563,7 @@ fn helpers_crashing_together_restart_and_loop_recovers() {
     nova.say("Beide da");
     nova.wait_for(
         HelperKind::Tts,
-        r#"{"cmd":"speak","id":"1","text":"Du sagtest: Beide da"}"#,
+        r#"{"cmd":"speak","id":"1","text":"Das kann ich noch nicht."}"#,
     );
     nova.shut_down().expect("clean shutdown");
 }
@@ -419,7 +604,7 @@ fn exit_during_restart_wait_restarts_that_helper_too() {
     nova.say("Alle da");
     nova.wait_for(
         HelperKind::Tts,
-        r#"{"cmd":"speak","id":"1","text":"Du sagtest: Alle da"}"#,
+        r#"{"cmd":"speak","id":"1","text":"Das kann ich noch nicht."}"#,
     );
 
     // The restart of the other helper counted: its next exit is the second one.

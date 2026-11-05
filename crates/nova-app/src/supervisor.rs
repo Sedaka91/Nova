@@ -1,13 +1,16 @@
 //! Driver of the voice loop: runs the helpers and executes the state machine's actions.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow};
 use nova_core::config::Config;
 use serde::Serialize;
 
+use crate::commands::{Command, Reply};
 use crate::helper::{Helper, HelperSpec, Incoming};
 use crate::protocol::{HelperEvent, HelperKind, SttCommand, TtsCommand, WakewordCommand};
 use crate::voice_loop::{Action, Dialog, Input, step};
@@ -19,7 +22,12 @@ pub struct LoopSettings {
     pub ready_timeout: Duration,
     /// How long Nova waits for speech after the wake word and after an answer.
     pub follow_up: Duration,
+    /// How long a command may run before Nova gives up on it.
+    pub work_timeout: Duration,
 }
+
+/// Executes a command on a worker thread.
+pub type Executor = Arc<dyn Fn(Command) -> Reply + Send + Sync>;
 
 /// Runs all helpers and the voice loop until `Incoming::Shutdown` arrives.
 ///
@@ -33,6 +41,7 @@ pub struct LoopSettings {
 pub fn run(
     specs: &[HelperSpec],
     settings: &LoopSettings,
+    executor: Executor,
     tx: Sender<Incoming>,
     rx: Receiver<Incoming>,
 ) -> anyhow::Result<()> {
@@ -51,11 +60,13 @@ pub fn run(
     let mut driver = Driver {
         slots,
         settings,
+        executor,
         tx,
         rx,
         dialog: Dialog::new(),
         deadline: None,
         spoken: None,
+        running: None,
         next_id: 1,
     };
     let kinds: Vec<HelperKind> = specs.iter().map(|spec| spec.kind).collect();
@@ -156,13 +167,17 @@ struct Slot<'a> {
 struct Driver<'a> {
     slots: Vec<Slot<'a>>,
     settings: &'a LoopSettings,
-    /// Handed to restarted helpers; also keeps `rx` connected.
+    executor: Executor,
+    /// Handed to restarted helpers and worker threads; also keeps `rx` connected.
     tx: Sender<Incoming>,
     rx: Receiver<Incoming>,
     dialog: Dialog,
     deadline: Option<Instant>,
     /// Id of the utterance in progress; a `done` with any other id is stale.
     spoken: Option<String>,
+    /// Id of the run in progress; a reply with any other id is stale.
+    running: Option<u64>,
+    /// Next id for an utterance or a run.
     next_id: u64,
 }
 
@@ -218,6 +233,9 @@ impl<'a> Driver<'a> {
                 Ok(Incoming::Event(kind, event)) => {
                     tracing::debug!(?kind, ?event, "event dropped while waiting for ready");
                 }
+                Ok(Incoming::Reply(id, _)) => {
+                    tracing::debug!(id, "reply dropped while waiting for ready");
+                }
                 Ok(Incoming::Exited(kind)) => match on_exit {
                     OnExit::Fatal => {
                         return Err(self.failure(kind, "exited while waiting for ready"));
@@ -246,6 +264,7 @@ impl<'a> Driver<'a> {
             };
             match received {
                 Ok(Incoming::Event(kind, event)) => self.on_event(kind, event),
+                Ok(Incoming::Reply(id, reply)) => self.on_reply(id, reply),
                 Ok(Incoming::Exited(kind)) => {
                     if let Flow::Shutdown = self.restart(kind)? {
                         return Ok(());
@@ -275,6 +294,15 @@ impl<'a> Driver<'a> {
             _ => {}
         }
         self.advance(Input::Event(event));
+    }
+
+    fn on_reply(&mut self, id: u64, reply: Reply) {
+        if self.running != Some(id) {
+            tracing::debug!(id, "stale reply dropped");
+            return;
+        }
+        self.running = None;
+        self.advance(Input::Reply(reply));
     }
 
     fn on_timeout(&mut self) {
@@ -317,7 +345,26 @@ impl<'a> Driver<'a> {
                 self.deadline = Some(Instant::now() + self.settings.follow_up);
             }
             Action::DisarmDeadline => self.deadline = None,
+            Action::Run(command) => self.start_run(command),
+            Action::AbandonRun => self.running = None,
+            Action::ArmWorkDeadline => {
+                self.deadline = Some(Instant::now() + self.settings.work_timeout);
+            }
         }
+    }
+
+    /// Runs `command` on its own thread so that Nova stays interruptible meanwhile.
+    fn start_run(&mut self, command: Command) {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.running = Some(id);
+        let executor = Arc::clone(&self.executor);
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let reply = executor(command);
+            // A closed receiver means the loop has already ended.
+            let _ = tx.send(Incoming::Reply(id, reply));
+        });
     }
 
     /// Replaces an exited helper, which is allowed once per helper.
@@ -345,6 +392,7 @@ impl<'a> Driver<'a> {
         self.send(HelperKind::Wakeword, &WakewordCommand::Resume);
         self.deadline = None;
         self.spoken = None;
+        self.running = None;
         self.enter(Dialog::new());
         Ok(Flow::Continue)
     }

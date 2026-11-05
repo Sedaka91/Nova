@@ -1,6 +1,12 @@
 //! Pure state machine of the voice loop. A supervisor executes its actions.
 
+use crate::commands::{Command, Reply, parse};
 use crate::protocol::{HelperEvent, SttCommand, WakewordCommand};
+
+/// Spoken when a sentence matches no command.
+pub const UNKNOWN: &str = "Das kann ich noch nicht.";
+/// Spoken when a command misses the work deadline.
+pub const TOO_SLOW: &str = "Das hat zu lange gedauert.";
 
 /// Phase of the voice loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9,6 +15,8 @@ pub enum State {
     Waiting,
     /// Wake word heard, waiting for the user's sentence.
     Listening,
+    /// A worker thread executes a command.
+    Working,
     /// Nova is speaking.
     Speaking,
     /// Nova finished speaking, the user may continue without wake word.
@@ -49,6 +57,8 @@ impl Default for Dialog {
 pub enum Input {
     Event(HelperEvent),
     DeadlineExpired,
+    /// Answer of the current worker thread.
+    Reply(Reply),
 }
 
 /// Side effect requested by a transition.
@@ -61,6 +71,12 @@ pub enum Action {
     StopSpeaking,
     ArmDeadline,
     DisarmDeadline,
+    /// Executes the command on a worker thread.
+    Run(Command),
+    /// Stops waiting for the current worker thread; its effect is not undone.
+    AbandonRun,
+    /// Starts the deadline of a worker thread.
+    ArmWorkDeadline,
 }
 
 /// Computes the next state and the actions to execute.
@@ -114,10 +130,16 @@ pub fn step(dialog: Dialog, input: Input) -> (Dialog, Vec<Action>) {
             }
             let text = heard.join(" ");
             match (state, text.is_empty()) {
-                (_, false) => (
-                    in_state(Speaking),
-                    vec![DisarmDeadline, Speak(format!("Du sagtest: {text}"))],
-                ),
+                (_, false) => match parse(&text) {
+                    Some(command) => (
+                        in_state(Working),
+                        vec![DisarmDeadline, Run(command), ArmWorkDeadline],
+                    ),
+                    None => (
+                        in_state(Speaking),
+                        vec![DisarmDeadline, Speak(UNKNOWN.to_owned())],
+                    ),
+                },
                 (FollowUp, true) => (in_state(FollowUp), vec![ArmDeadline]),
                 (_, true) => {
                     let mut actions = vec![DisarmDeadline];
@@ -126,6 +148,21 @@ pub fn step(dialog: Dialog, input: Input) -> (Dialog, Vec<Action>) {
                 }
             }
         }
+        (Working, Input::Event(SpeechStart)) => {
+            let barged_in = Dialog {
+                open: 1,
+                ..in_state(Listening)
+            };
+            (barged_in, vec![AbandonRun, DisarmDeadline])
+        }
+        (Working, Input::DeadlineExpired) => (
+            in_state(Speaking),
+            vec![AbandonRun, Speak(TOO_SLOW.to_owned())],
+        ),
+        (Working, Input::Reply(Reply::Say(text))) => {
+            (in_state(Speaking), vec![DisarmDeadline, Speak(text)])
+        }
+        (Working, Input::Reply(Reply::Silent)) => (in_state(FollowUp), vec![ArmDeadline]),
         (Listening | FollowUp, Input::DeadlineExpired) => (in_state(Waiting), give_up()),
         (Speaking, Input::Event(Done { .. })) => (in_state(FollowUp), vec![ArmDeadline]),
         (state, input) => {
@@ -172,6 +209,19 @@ mod tests {
     fn start() -> Input {
         ev(HelperEvent::SpeechStart)
     }
+    fn ran(actions: &[Vec<Action>]) -> Vec<Command> {
+        actions
+            .iter()
+            .flatten()
+            .filter_map(|action| match action {
+                Run(command) => Some(command.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+    fn firefox() -> Vec<Command> {
+        vec![Command::OpenApp("firefox".into())]
+    }
     fn spoken(actions: &[Vec<Action>]) -> Vec<String> {
         actions
             .iter()
@@ -215,10 +265,78 @@ mod tests {
     }
 
     #[test]
-    fn final_is_echoed_with_template() {
+    fn final_with_command_starts_work() {
+        assert_eq!(
+            run(Listening, fin("Pause.")),
+            (
+                Working,
+                vec![DisarmDeadline, Run(Command::Pause), ArmWorkDeadline]
+            )
+        );
+    }
+
+    #[test]
+    fn final_in_follow_up_with_command_starts_work() {
+        assert_eq!(
+            run(FollowUp, fin("Pause.")),
+            (
+                Working,
+                vec![DisarmDeadline, Run(Command::Pause), ArmWorkDeadline]
+            )
+        );
+    }
+
+    #[test]
+    fn final_without_command_says_unknown() {
         let (s, actions) = run(Listening, fin("Hallo"));
         assert_eq!(s, Speaking);
-        assert!(actions.contains(&Speak("Du sagtest: Hallo".into())));
+        assert!(actions.contains(&Speak(UNKNOWN.into())));
+        assert!(actions.contains(&DisarmDeadline));
+    }
+
+    #[test]
+    fn reply_say_is_spoken() {
+        assert_eq!(
+            run(Working, Input::Reply(Reply::Say("x".into()))),
+            (Speaking, vec![DisarmDeadline, Speak("x".into())])
+        );
+    }
+
+    #[test]
+    fn reply_silent_goes_to_follow_up() {
+        assert_eq!(
+            run(Working, Input::Reply(Reply::Silent)),
+            (FollowUp, vec![ArmDeadline])
+        );
+    }
+
+    #[test]
+    fn speech_in_working_abandons_the_run() {
+        let (dialog, actions) = step(at(Working), start());
+        assert_eq!(dialog.state, Listening);
+        assert_eq!(dialog.open, 1);
+        assert_eq!(actions, vec![AbandonRun, DisarmDeadline]);
+    }
+
+    #[test]
+    fn work_deadline_gives_up_with_a_sentence() {
+        assert_eq!(
+            run(Working, Input::DeadlineExpired),
+            (Speaking, vec![AbandonRun, Speak(TOO_SLOW.into())])
+        );
+    }
+
+    #[test]
+    fn final_in_working_is_dropped() {
+        assert_eq!(run(Working, fin("Pause.")), (Working, vec![]));
+    }
+
+    #[test]
+    fn reply_outside_working_is_ignored() {
+        assert_eq!(
+            run(Listening, Input::Reply(Reply::Silent)),
+            (Listening, vec![])
+        );
     }
 
     #[test]
@@ -267,10 +385,10 @@ mod tests {
     }
 
     #[test]
-    fn final_in_follow_up_is_echoed() {
+    fn final_in_follow_up_without_command_says_unknown() {
         let (s, actions) = run(FollowUp, fin("Noch eins"));
         assert_eq!(s, Speaking);
-        assert!(actions.contains(&Speak("Du sagtest: Noch eins".into())));
+        assert!(actions.contains(&Speak(UNKNOWN.into())));
         assert!(actions.contains(&DisarmDeadline));
     }
 
@@ -304,12 +422,15 @@ mod tests {
     }
 
     #[test]
-    fn overlapping_utterances_are_spoken_once_after_the_last_final() {
-        let (dialog, actions) = feed(at(Listening), vec![start(), start(), fin("A"), fin("B")]);
-        assert_eq!(dialog.state, Speaking);
+    fn overlapping_utterances_join_into_one_command() {
+        let (dialog, actions) = feed(
+            at(Listening),
+            vec![start(), start(), fin("öffne"), fin("firefox")],
+        );
+        assert_eq!(dialog.state, Working);
         assert_eq!(actions[2], vec![]);
-        assert_eq!(spoken(&actions), ["Du sagtest: A B"]);
-        assert!(actions[3].contains(&Speak("Du sagtest: A B".into())));
+        assert_eq!(ran(&actions), firefox());
+        assert_eq!(spoken(&actions), Vec::<String>::new());
     }
 
     #[test]
@@ -317,14 +438,17 @@ mod tests {
         let (dialog, actions) = feed(at(Listening), vec![start(), start(), fin(""), fin("Hallo")]);
         assert_eq!(dialog.state, Speaking);
         assert!(!actions.iter().flatten().any(|a| give_up().contains(a)));
-        assert_eq!(spoken(&actions), ["Du sagtest: Hallo"]);
+        assert_eq!(spoken(&actions), [UNKNOWN]);
     }
 
     #[test]
     fn overlapping_utterances_in_follow_up_are_joined_without_arming() {
-        let (dialog, actions) = feed(at(FollowUp), vec![start(), start(), fin("A"), fin("B")]);
-        assert_eq!(dialog.state, Speaking);
-        assert_eq!(spoken(&actions), ["Du sagtest: A B"]);
+        let (dialog, actions) = feed(
+            at(FollowUp),
+            vec![start(), start(), fin("öffne"), fin("firefox")],
+        );
+        assert_eq!(dialog.state, Working);
+        assert_eq!(ran(&actions), firefox());
         assert!(!actions.iter().flatten().any(|a| *a == ArmDeadline));
     }
 
@@ -332,7 +456,7 @@ mod tests {
     fn empty_final_in_follow_up_does_not_arm_while_an_utterance_is_open() {
         let (dialog, actions) = feed(at(FollowUp), vec![start(), start(), fin(""), fin("Hallo")]);
         assert_eq!(dialog.state, Speaking);
-        assert_eq!(spoken(&actions), ["Du sagtest: Hallo"]);
+        assert_eq!(spoken(&actions), [UNKNOWN]);
         assert!(!actions.iter().flatten().any(|a| *a == ArmDeadline));
     }
 
@@ -354,32 +478,49 @@ mod tests {
 
     #[test]
     fn barge_in_followed_by_overlapping_utterances_is_joined() {
-        let (dialog, actions) = feed(at(Speaking), vec![start(), start(), fin("A"), fin("B")]);
+        let (dialog, actions) = feed(
+            at(Speaking),
+            vec![start(), start(), fin("öffne"), fin("firefox")],
+        );
         assert_eq!(actions[0], vec![StopSpeaking]);
-        assert_eq!(dialog.state, Speaking);
-        assert_eq!(spoken(&actions), ["Du sagtest: A B"]);
+        assert_eq!(dialog.state, Working);
+        assert_eq!(ran(&actions), firefox());
     }
 
     #[test]
-    fn barge_in_utterance_alone_is_spoken_at_its_final() {
+    fn barge_in_utterance_alone_acts_at_its_final() {
         let (dialog, actions) = feed(at(Speaking), vec![start(), fin("Stopp")]);
-        assert_eq!(dialog.state, Speaking);
-        assert_eq!(spoken(&actions), ["Du sagtest: Stopp"]);
+        assert_eq!(dialog.state, Working);
+        assert_eq!(ran(&actions), [Command::Dismiss]);
+        assert_eq!(spoken(&actions), Vec::<String>::new());
     }
 
     #[test]
     fn heard_text_does_not_leak_into_the_next_sentence() {
         let (dialog, _) = feed(at(Listening), vec![start(), start(), fin("A"), fin("B")]);
         let done = ev(HelperEvent::Done { id: "1".into() });
-        let (_, actions) = feed(dialog, vec![done, start(), fin("C")]);
-        assert_eq!(spoken(&actions), ["Du sagtest: C"]);
+        let (_, actions) = feed(dialog, vec![done, start(), fin("Pause.")]);
+        assert_eq!(ran(&actions), [Command::Pause]);
     }
 
     #[test]
     fn final_while_speaking_is_not_kept_for_the_next_sentence() {
         let done = ev(HelperEvent::Done { id: "1".into() });
-        let (_, actions) = feed(at(Speaking), vec![fin("Echo"), done, start(), fin("Hallo")]);
-        assert_eq!(spoken(&actions), ["Du sagtest: Hallo"]);
+        let (_, actions) = feed(
+            at(Speaking),
+            vec![fin("Echo"), done, start(), fin("Pause.")],
+        );
+        assert_eq!(ran(&actions), [Command::Pause]);
+    }
+
+    #[test]
+    fn final_in_working_is_not_kept_for_the_next_sentence() {
+        let silent = Input::Reply(Reply::Silent);
+        let (_, actions) = feed(
+            at(Working),
+            vec![fin("Echo"), silent, start(), fin("Pause.")],
+        );
+        assert_eq!(ran(&actions), [Command::Pause]);
     }
 
     #[test]
@@ -391,8 +532,8 @@ mod tests {
         assert_eq!(dialog, Dialog::new());
 
         let wake = ev(HelperEvent::Wake { score: 0.9 });
-        let (dialog, actions) = feed(dialog, vec![start(), wake, start(), fin("Hallo")]);
-        assert_eq!(dialog.state, Speaking);
-        assert_eq!(spoken(&actions), ["Du sagtest: Hallo"]);
+        let (dialog, actions) = feed(dialog, vec![start(), wake, start(), fin("Pause.")]);
+        assert_eq!(dialog.state, Working);
+        assert_eq!(ran(&actions), [Command::Pause]);
     }
 }
