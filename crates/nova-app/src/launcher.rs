@@ -15,7 +15,7 @@ pub fn open(apps: &Apps, name: &str) -> Reply {
     let Some(id) = lookup(apps, name) else {
         return Reply::Say(format!("{name} ist nicht freigegeben."));
     };
-    match tools::run("gtk-launch", &[id]) {
+    match tools::launch("gtk-launch", &[id]) {
         Ok(()) => Reply::Say(format!("{name} wird geöffnet.")),
         Err(err) => {
             tracing::warn!(?err, id, "gtk-launch failed");

@@ -16,7 +16,7 @@ pub fn url(engine: Engine, term: &str) -> String {
 
 /// Open the search in the default browser.
 pub fn open(engine: Engine, term: &str) -> Reply {
-    match tools::run("xdg-open", &[&url(engine, term)]) {
+    match tools::launch("xdg-open", &[&url(engine, term)]) {
         Ok(()) => Reply::Say(format!("Ich suche nach {term}.")),
         Err(err) => {
             tracing::warn!(?err, "xdg-open failed");

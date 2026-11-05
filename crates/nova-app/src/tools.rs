@@ -1,6 +1,7 @@
 //! Shared helpers for child processes and HTTP.
 
 use std::io::Read;
+use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -49,6 +50,27 @@ pub fn run(program: &str, args: &[&str]) -> Result<(), ToolError> {
     }
 }
 
+/// Start a long-lived GUI program in its own process group with no stdio attached,
+/// so Ctrl+C or the exit of Nova does not reach it. Waits for the launcher itself only.
+pub fn launch(program: &str, args: &[&str]) -> Result<(), ToolError> {
+    let status = Command::new(program)
+        .args(args)
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|err| match err.kind() {
+            std::io::ErrorKind::NotFound => ToolError::Missing,
+            _ => ToolError::Failed(err.to_string()),
+        })?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(ToolError::Failed(status.to_string()))
+    }
+}
+
 /// HTTP agent with a 5 s timeout; 4xx/5xx are returned as responses so bodies stay readable.
 pub fn http_agent() -> ureq::Agent {
     ureq::Agent::config_builder()
@@ -77,6 +99,30 @@ mod tests {
         let start = std::time::Instant::now();
         assert!(run("sh", &["-c", "sleep 5 &"]).is_ok());
         assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn launch_reports_missing_failed_and_ok() {
+        assert!(matches!(
+            launch("nova-gibt-es-nicht", &[]),
+            Err(ToolError::Missing)
+        ));
+        assert!(matches!(launch("false", &[]), Err(ToolError::Failed(_))));
+        assert!(launch("true", &[]).is_ok());
+    }
+
+    #[test]
+    fn launched_child_has_its_own_process_group() {
+        let path = std::env::temp_dir().join(format!("nova-launch-{}", std::process::id()));
+        let script = format!("ps -o pgid= $$ > {}", path.display());
+        assert!(launch("sh", &["-c", &script]).is_ok());
+        let pgid: i32 = std::fs::read_to_string(&path)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_ne!(pgid, nix::unistd::getpgrp().as_raw());
     }
 
     #[test]
