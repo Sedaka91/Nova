@@ -123,6 +123,16 @@ fn non_empty(s: &str) -> Option<String> {
 
 fn number_word(word: &str) -> Option<u8> {
     Some(match word {
+        "null" => 0,
+        "eins" => 1,
+        "zwei" => 2,
+        "drei" => 3,
+        "vier" => 4,
+        "fünf" => 5,
+        "sechs" => 6,
+        "sieben" => 7,
+        "acht" => 8,
+        "neun" => 9,
         "zehn" => 10,
         "zwanzig" => 20,
         "dreißig" | "dreissig" => 30,
@@ -139,7 +149,9 @@ fn number_word(word: &str) -> Option<u8> {
 
 fn parse_volume(s: &str) -> Option<Command> {
     let rest = s.strip_prefix("lautstärke auf ")?;
-    let rest = strip_word_suffix(rest, "prozent").unwrap_or(rest);
+    let rest = strip_word_suffix(rest, "prozent")
+        .or_else(|| rest.strip_suffix('%').map(str::trim_end))
+        .unwrap_or(rest);
     let n = number_word(rest).or_else(|| rest.parse::<u8>().ok())?;
     (n <= 100).then_some(Command::VolumeSet(n))
 }
@@ -175,7 +187,12 @@ fn parse_weather(s: &str) -> Option<Command> {
 }
 
 fn parse_search(s: &str) -> Option<Command> {
-    for p in ["such bei youtube", "such auf youtube"] {
+    for p in [
+        "such bei youtube",
+        "such auf youtube",
+        "suche bei youtube",
+        "suche auf youtube",
+    ] {
         if let Some(rest) = strip_word_prefix(s, p) {
             let rest = strip_word_prefix(rest, "nach").unwrap_or(rest);
             return non_empty(rest).map(|q| Command::Search(Engine::YouTube, q));
@@ -245,7 +262,7 @@ pub fn parse(text: &str) -> Option<Command> {
     let s = s.as_str();
     match s {
         "stopp" | "stop" => return Some(Command::Dismiss),
-        "play" | "spiel weiter" | "musik an" | "musik weiter" | "fortsetzen" => {
+        "play" | "spiel weiter" | "spiele weiter" | "musik an" | "musik weiter" | "fortsetzen" => {
             return Some(Command::Play);
         }
         "pause" | "musik aus" | "musik stopp" | "musik pausieren" => return Some(Command::Pause),
@@ -292,6 +309,8 @@ mod tests {
             ("Pause!", Pause),
             ("Musik aus.", Pause),
             ("Spiel weiter.", Play),
+            ("Spiele weiter.", Play),
+            ("Nova, bitte stopp.", Dismiss),
             ("Weiter.", Next),
             ("Nächstes Lied.", Next),
             ("Zurück.", Previous),
@@ -299,6 +318,10 @@ mod tests {
             ("Leiser, bitte.", VolumeStep(-10)),
             ("Lautstärke auf 30.", VolumeSet(30)),
             ("Lautstärke auf 30 Prozent.", VolumeSet(30)),
+            ("Lautstärke auf 30%.", VolumeSet(30)),
+            ("Lautstärke auf 30 %.", VolumeSet(30)),
+            ("Lautstärke auf null.", VolumeSet(0)),
+            ("Lautstärke auf fünf.", VolumeSet(5)),
             ("Lautstärke auf dreißig.", VolumeSet(30)),
             ("Lautstärke auf hundert.", VolumeSet(100)),
             ("Hey Nova, wie wird das Wetter?", weather(None, Day::Today)),
@@ -309,6 +332,18 @@ mod tests {
             ("Wetter für Köln.", weather(Some("köln"), Day::Today)),
             (
                 "Such bei YouTube nach Katzen.",
+                Search(Engine::YouTube, "katzen".into()),
+            ),
+            (
+                "Suche bei YouTube nach Katzen.",
+                Search(Engine::YouTube, "katzen".into()),
+            ),
+            (
+                "Suche auf YouTube Katzen.",
+                Search(Engine::YouTube, "katzen".into()),
+            ),
+            (
+                "Such auf YouTube nach Katzen.",
                 Search(Engine::YouTube, "katzen".into()),
             ),
             (
@@ -346,6 +381,8 @@ mod tests {
         for text in [
             "Warum ist das Wetter so schlecht?",
             "Such nach.",
+            "Such bei YouTube.",
+            "Mach auf.",
             "Spiel.",
             "Lautstärke auf 130.",
             "Wie spät ist es?",
