@@ -292,6 +292,20 @@ Die letzte Prüfung ist das bekannte Risiko dieser Phase: Das Echo-Modul rechnet
 
 Lässt sich die Lautstärke über `playerctl` bei der nativen Spotify-App nicht setzen, weicht `music` für `VolumeSet` und `VolumeStep` auf `PUT /me/player/volume` aus.
 
+### Zwischenstand der Abnahme (2026-11-05)
+
+Abnahme verschoben, Phase 2 ist nicht abgenommen. Getestet mit `hey_jarvis`, ohne Spotify-Login und ohne Heimatort. Ergebnisse aus dem Log, keine Warnungen oder Fehler.
+
+| Prüfung | Stand |
+|---|---|
+| Suche | teilweise: Google und YouTube ausgelöst, Antwort unter 0,1 s; Browser und Begriff vom Nutzer noch nicht bestätigt |
+| Lautstärke | teilweise: „lauter“ und „leiser“ ohne Fehler; hörbare Wirkung und „Lautstärke auf 30“ offen |
+| Wake Word in der Nachfrage | bestanden, nach Fix in 4055528 |
+| Transport, Programme, Wetter, Unbekannt, Barge-in in `Working`, Programm überlebt Nova, Browser-Suche ohne Wartezeit, Offline, Musik im Raum | offen |
+| Spotify-Inhalte, Heimatort | offen, warten auf `nova spotify-login` mit gültiger Client-ID und den Eintrag in `~/.config/nova/nova.toml` |
+
+Formulierungen aus dem Test, die noch keine Regel sind: „pausiere Spotify“, „suche Geld“ (ohne „nach“).
+
 ## Dokumentation
 
 Nach Abschluss werden aktualisiert: `docs/architektur.md` (Phasenstatus, Arbeits-Thread, Zustand `Working`), `README.md` (Stand, Spotify-Login, `playerctl`, Hinweis auf Open-Meteo).
