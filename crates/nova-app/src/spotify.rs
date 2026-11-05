@@ -7,6 +7,7 @@ use std::fmt;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::{Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -19,6 +20,9 @@ use sha2::{Digest, Sha256};
 
 use crate::commands::{ContentKind, Reply};
 use crate::{secrets, tools};
+
+/// Serializes read, refresh and store of the refresh token.
+static TOKEN_LOCK: Mutex<()> = Mutex::new(());
 
 const AUTHORIZE_URL: &str = "https://accounts.spotify.com/authorize";
 const TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
@@ -199,6 +203,9 @@ fn request_tokens(form: &[(&str, &str)]) -> Result<Tokens, SpotifyError> {
 /// revoked, [`SpotifyError::Unreachable`] when KWallet cannot be read, for example while
 /// locked, or the token request fails.
 pub fn access_token() -> Result<String, SpotifyError> {
+    // An abandoned worker may still be running; two refreshes with the same token
+    // could lose the login, so only one runs at a time.
+    let _guard = TOKEN_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
     let client_id = stored(CLIENT_ID_ACCOUNT)?;
     let refresh_token = stored(REFRESH_TOKEN_ACCOUNT)?;
     let tokens = request_tokens(&[
@@ -286,7 +293,7 @@ fn prompt_client_id() -> anyhow::Result<String> {
 fn open_browser(url: String) {
     thread::spawn(move || {
         // The error may quote the URL, so it stays out of the log.
-        if tools::run("xdg-open", &[&url]).is_err() {
+        if tools::launch("xdg-open", &[&url]).is_err() {
             println!("Der Browser ließ sich nicht öffnen.");
         }
     });
@@ -376,7 +383,7 @@ fn parse(json: &str) -> serde_json::Value {
     serde_json::from_str(json).unwrap_or_default()
 }
 
-/// Id of the active device, else the first one.
+/// Id of the active device, else the first one that has an id.
 pub fn pick_device(json: &str) -> Option<String> {
     let json = parse(json);
     let devices = json["devices"].as_array()?;
@@ -385,7 +392,7 @@ pub fn pick_device(json: &str) -> Option<String> {
         .iter()
         .find(|device| device["is_active"].as_bool() == Some(true))
         .and_then(id)
-        .or_else(|| devices.first().and_then(id))
+        .or_else(|| devices.iter().find_map(id))
 }
 
 /// Artist if its name equals `query` ignoring case, else the first track.
@@ -473,7 +480,7 @@ fn start_playback(kind: ContentKind, query: &str) -> Result<String, SpotifyError
             tracing::warn!(%err, "Spotify play request failed");
             SpotifyError::Unreachable
         })?;
-    check_status(response.status().as_u16())?;
+    play_status(response.status().as_u16())?;
     // The answer is an empty 204; drain it so the connection ends cleanly.
     let _ = response.body_mut().read_to_string();
     Ok(name)
@@ -513,6 +520,14 @@ fn check_status(status: u16) -> Result<(), SpotifyError> {
             tracing::warn!(status, "Spotify API returned an error");
             Err(SpotifyError::Unreachable)
         }
+    }
+}
+
+/// A play request answering 404 means the device vanished in the meantime.
+fn play_status(status: u16) -> Result<(), SpotifyError> {
+    match status {
+        404 => Err(SpotifyError::NoDevice),
+        _ => check_status(status),
     }
 }
 
@@ -740,6 +755,20 @@ mod tests {
     fn first_device_without_active_one() {
         let json = r#"{"devices":[{"id":"a","is_active":false}]}"#;
         assert_eq!(pick_device(json), Some("a".into()));
+    }
+
+    #[test]
+    fn device_without_id_is_skipped() {
+        let json = r#"{"devices":[{"id":null,"is_active":false},{"id":"b","is_active":false}]}"#;
+        assert_eq!(pick_device(json), Some("b".into()));
+    }
+
+    #[test]
+    fn play_404_means_no_device_but_403_stays_unreachable() {
+        assert!(matches!(play_status(204), Ok(())));
+        assert!(matches!(play_status(404), Err(SpotifyError::NoDevice)));
+        assert!(matches!(play_status(403), Err(SpotifyError::Unreachable)));
+        assert!(matches!(play_status(401), Err(SpotifyError::NotLoggedIn)));
     }
 
     #[test]
