@@ -157,7 +157,7 @@ def test_preroll_is_part_of_transcribed_audio(rig: Rig) -> None:
     assert blocks_of(rig.finals[0]) == [*range(-PREROLL, 0), 1, *[0] * SILENCE]
 
 
-def test_preroll_collects_while_inactive(rig: Rig) -> None:
+def test_blocks_seen_while_inactive_do_not_reach_the_first_utterance(rig: Rig) -> None:
     for value in range(-20, 0):
         rig.segmenter.process_block(np.full(BLOCK_SAMPLES, value, dtype=np.int16))
 
@@ -166,7 +166,18 @@ def test_preroll_collects_while_inactive(rig: Rig) -> None:
     rig.silence(SILENCE)
     rig.wait_for("final")
 
-    assert blocks_of(rig.finals[0])[:PREROLL] == list(range(-PREROLL, 0))
+    assert blocks_of(rig.finals[0]) == [1, *[0] * SILENCE]
+
+
+def test_repeated_listen_keeps_audio_of_a_running_utterance(rig: Rig) -> None:
+    rig.listen()
+    rig.speech(3)
+
+    rig.segmenter.handle({"cmd": "listen"})
+    rig.silence(SILENCE)
+    rig.wait_for("final")
+
+    assert blocks_of(rig.finals[0]) == [1, 2, 3, *[0] * SILENCE]
 
 
 def test_final_after_800ms_silence(rig: Rig) -> None:

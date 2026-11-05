@@ -98,6 +98,7 @@ class Segmenter:
                         return
                     if self._reset_vad is not None:
                         self._reset_vad()  # it last heard audio from before the pause
+                    self._preroll.clear()  # it holds the end of the wake word
                     self._active = True
             case "cancel":
                 with self._changed:
