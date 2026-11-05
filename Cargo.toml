@@ -19,6 +19,8 @@ ctrlc = "3"
 nix = { version = "0.31", features = ["signal"] }
 ureq = "3"
 percent-encoding = "2"
+sha2 = "0.11"
+base64 = "0.23"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

@@ -6,6 +6,8 @@ pub mod launcher;
 pub mod music;
 pub mod protocol;
 pub mod search;
+pub mod secrets;
+pub mod spotify;
 pub mod supervisor;
 pub mod tools;
 pub mod voice_loop;
