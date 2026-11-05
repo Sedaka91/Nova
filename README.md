@@ -33,7 +33,9 @@ Phase 0 (Grundgerüst) ist erledigt. **Phase 1** (Sprachschleife) ist umgesetzt,
 sudo pacman -S playerctl
 ```
 
-- **Heimatort:** In der lokalen `config/nova.toml` unter `[wetter]` `heimatort = "…"` setzen (nicht einchecken). Ohne Heimatort sagt Nova, dass er fehlt.
+Den `pacman`-Befehl führst du selbst aus; Nova und Claude Code nutzen kein `sudo`.
+
+- **Heimatort:** `config/nova.toml` ist eingecheckt, dort gehört kein persönlicher Ort hinein. Stattdessen eine Kopie von `config/` außerhalb des Repos anlegen (`~/.config/nova`, so wie `deploy/nova.desktop` es tut), dort unter `[wetter]` `heimatort = "…"` setzen und Nova mit `NOVA_CONFIG_DIR=~/.config/nova` starten. So bleibt der Heimatort außerhalb des Repos. Ohne Heimatort sagt Nova, dass er fehlt.
 - **Spotify:** Im Spotify-Dashboard eine App registrieren, Redirect-URI `http://127.0.0.1:8898/callback`. Danach einmalig anmelden; Nova fragt im Terminal nach der Client-ID und öffnet den Browser. Client-ID und Token landen in KWallet.
 
 ```sh

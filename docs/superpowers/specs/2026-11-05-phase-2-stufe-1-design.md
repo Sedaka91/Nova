@@ -283,6 +283,8 @@ Mit Echo-Modul, Ausgabe über Lautsprecher, gesprochen vom Nutzer. Voraussetzung
 | Suche | Google und YouTube öffnen mit korrektem Begriff, auch mit Umlauten |
 | Unbekannt | eine allgemeine Frage ergibt „Das kann ich noch nicht.“ |
 | Barge-in in `Working` | Sprechen während einer Wetteranfrage verwirft die Antwort, 3 von 3 |
+| Programm überlebt Nova | per Stimme ein Programm öffnen, Nova mit Ctrl+C beenden: das Programm läuft weiter |
+| Browser-Suche ohne Wartezeit | nach einer Suche kommt die Antwort sofort, kein „Das hat zu lange gedauert.“ |
 | Offline | ohne Netz antwortet Nova mit dem Fehlersatz, die Schleife läuft weiter |
 | Musik im Raum | Wake Word und „Pause“ bei Musik in üblicher Lautstärke: mindestens 8 von 10 |
 
