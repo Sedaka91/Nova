@@ -304,6 +304,8 @@ Abnahme verschoben, Phase 2 ist nicht abgenommen. Getestet mit `hey_jarvis`, ohn
 | Transport, Programme, Wetter, Unbekannt, Barge-in in `Working`, Programm überlebt Nova, Browser-Suche ohne Wartezeit, Offline, Musik im Raum | offen |
 | Spotify-Inhalte, Heimatort | offen, warten auf `nova spotify-login` mit gültiger Client-ID und den Eintrag in `~/.config/nova/nova.toml` |
 
+Nach dem Merge läuft `main` mit `models/hey_nova.onnx`; die offenen Prüfungen und die Abnahme von Phase 1 werden gemeinsam gemacht.
+
 Formulierungen aus dem Test, die noch keine Regel sind: „pausiere Spotify“, „suche Geld“ (ohne „nach“).
 
 ## Dokumentation

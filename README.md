@@ -25,7 +25,7 @@ cargo run -p nova-app
 
 ## Stand
 
-Phase 0 (Grundgerüst) ist erledigt. **Phase 1** (Sprachschleife) ist umgesetzt, aber nicht vollständig abgenommen: `models/hey_nova.onnx` fehlt noch. **Phase 2** (Stufe 1: Musik, Wetter, Apps, Suche) ist umgesetzt und wartet auf die Abnahme am Gerät. Nächster Schritt laut Plan: Phase 3 (lokales Modell, Router).
+Phase 0 (Grundgerüst) ist erledigt. **Phase 1** (Sprachschleife) und **Phase 2** (Stufe 1: Musik, Wetter, Apps, Suche) sind umgesetzt und zusammengeführt, die gemeinsame Abnahme am Gerät steht aus. Das Aktivierungswort ist „Hey Nova“ (`models/hey_nova.onnx`, Training unter `training/wakeword/`). Nächster Schritt laut Plan: Phase 3 (lokales Modell, Router).
 
 ### Stufe 1 einrichten
 
