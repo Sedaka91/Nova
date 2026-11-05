@@ -41,6 +41,8 @@ fn main() -> anyhow::Result<()> {
     let commands = Arc::new(Commands {
         home: config.wetter.heimatort.clone(),
         apps,
+        ollama_url: config.modelle.ollama_url.clone(),
+        chat_model: config.modelle.chat_modell.clone(),
     });
 
     tracing::info!(

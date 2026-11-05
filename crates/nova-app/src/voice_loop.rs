@@ -136,8 +136,8 @@ pub fn step(dialog: Dialog, input: Input) -> (Dialog, Vec<Action>) {
                         vec![DisarmDeadline, Run(command), ArmWorkDeadline],
                     ),
                     None => (
-                        in_state(Speaking),
-                        vec![DisarmDeadline, Speak(UNKNOWN.to_owned())],
+                        in_state(Working),
+                        vec![DisarmDeadline, Run(Command::Ask(text)), ArmWorkDeadline],
                     ),
                 },
                 (FollowUp, true) => (in_state(FollowUp), vec![ArmDeadline]),
@@ -287,10 +287,11 @@ mod tests {
     }
 
     #[test]
-    fn final_without_command_says_unknown() {
+    fn final_without_command_asks_the_model() {
         let (s, actions) = run(Listening, fin("Hallo"));
-        assert_eq!(s, Speaking);
-        assert!(actions.contains(&Speak(UNKNOWN.into())));
+        assert_eq!(s, Working);
+        assert!(actions.contains(&Run(Command::Ask("Hallo".into()))));
+        assert!(actions.contains(&ArmWorkDeadline));
         assert!(actions.contains(&DisarmDeadline));
     }
 
@@ -385,10 +386,10 @@ mod tests {
     }
 
     #[test]
-    fn final_in_follow_up_without_command_says_unknown() {
+    fn final_in_follow_up_without_command_asks_the_model() {
         let (s, actions) = run(FollowUp, fin("Noch eins"));
-        assert_eq!(s, Speaking);
-        assert!(actions.contains(&Speak(UNKNOWN.into())));
+        assert_eq!(s, Working);
+        assert!(actions.contains(&Run(Command::Ask("Noch eins".into()))));
         assert!(actions.contains(&DisarmDeadline));
     }
 
@@ -436,9 +437,9 @@ mod tests {
     #[test]
     fn empty_final_of_a_false_trigger_does_not_cancel_the_open_utterance() {
         let (dialog, actions) = feed(at(Listening), vec![start(), start(), fin(""), fin("Hallo")]);
-        assert_eq!(dialog.state, Speaking);
+        assert_eq!(dialog.state, Working);
         assert!(!actions.iter().flatten().any(|a| give_up().contains(a)));
-        assert_eq!(spoken(&actions), [UNKNOWN]);
+        assert_eq!(ran(&actions), [Command::Ask("Hallo".into())]);
     }
 
     #[test]
@@ -455,8 +456,8 @@ mod tests {
     #[test]
     fn empty_final_in_follow_up_does_not_arm_while_an_utterance_is_open() {
         let (dialog, actions) = feed(at(FollowUp), vec![start(), start(), fin(""), fin("Hallo")]);
-        assert_eq!(dialog.state, Speaking);
-        assert_eq!(spoken(&actions), [UNKNOWN]);
+        assert_eq!(dialog.state, Working);
+        assert_eq!(ran(&actions), [Command::Ask("Hallo".into())]);
         assert!(!actions.iter().flatten().any(|a| *a == ArmDeadline));
     }
 

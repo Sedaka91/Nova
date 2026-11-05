@@ -2,7 +2,8 @@
 
 use nova_core::apps::Apps;
 
-use crate::{launcher, music, search, spotify, weather};
+use crate::voice_loop::UNKNOWN;
+use crate::{launcher, music, ollama, search, spotify, weather};
 
 /// Day a weather report refers to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,10 +38,18 @@ pub enum Command {
     Previous,
     VolumeStep(i8),
     VolumeSet(u8),
-    Weather { place: Option<String>, day: Day },
+    Weather {
+        place: Option<String>,
+        day: Day,
+    },
     Search(Engine, String),
     OpenApp(String),
-    PlayContent { kind: ContentKind, query: String },
+    PlayContent {
+        kind: ContentKind,
+        query: String,
+    },
+    /// Any sentence no fixed command matched; answered by the local model (stage 2).
+    Ask(String),
 }
 
 /// What Nova says after a command ran.
@@ -55,12 +64,17 @@ pub struct Context {
     /// Home place from `nova.toml`, used when no place was spoken.
     pub home: String,
     pub apps: Apps,
+    /// `models.ollama_url` from `nova.toml`.
+    pub ollama_url: String,
+    /// `models.chat_modell`; empty switches stage 2 off.
+    pub chat_model: String,
 }
 
 impl Context {
     /// Runs a command; failures come back as spoken sentences.
     pub fn execute(&self, command: Command) -> Reply {
         match command {
+            Command::Ask(text) => self.ask(&text),
             Command::Dismiss => Reply::Silent,
             Command::Play
             | Command::Pause
@@ -72,6 +86,18 @@ impl Context {
             Command::Search(engine, term) => search::open(engine, &term),
             Command::OpenApp(name) => launcher::open(&self.apps, &name),
             Command::PlayContent { kind, query } => spotify::play(kind, &query),
+        }
+    }
+
+    /// Stage 2: the local model answers. Without a configured model, the old refusal stays.
+    fn ask(&self, text: &str) -> Reply {
+        if self.chat_model.is_empty() {
+            return Reply::Say(UNKNOWN.into());
+        }
+        match ollama::chat(&self.ollama_url, &self.chat_model, text) {
+            Ok(answer) if answer.is_empty() => Reply::Say(UNKNOWN.into()),
+            Ok(answer) => Reply::Say(answer),
+            Err(err) => Reply::Say(err.sentence().into()),
         }
     }
 }
@@ -441,7 +467,33 @@ mod tests {
         Context {
             home: home.into(),
             apps: Apps::from_map(std::collections::BTreeMap::new()).unwrap(),
+            ollama_url: String::new(),
+            chat_model: String::new(),
         }
+    }
+
+    #[test]
+    fn ask_without_model_keeps_the_refusal() {
+        assert_eq!(
+            context("").execute(Ask("Wie spät ist es?".into())),
+            Reply::Say(UNKNOWN.into())
+        );
+    }
+
+    #[test]
+    fn ask_with_unreachable_ollama_says_so() {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let mut ctx = context("");
+        ctx.ollama_url = format!("http://127.0.0.1:{port}");
+        ctx.chat_model = "m".into();
+        assert_eq!(
+            ctx.execute(Ask("Hallo".into())),
+            Reply::Say("Das Sprachmodell ist gerade nicht erreichbar.".into())
+        );
     }
 
     #[test]

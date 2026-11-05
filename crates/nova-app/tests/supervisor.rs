@@ -26,7 +26,7 @@ const WORK_TIMEOUT: Duration = Duration::from_millis(100);
 const HELLO_SCRIPT: &str = r#"{"auf_befehl":{"listen":[
     {"event":"speech_start"},{"event":"final","text":"Hallo"}]}}"#;
 const SPEAK_SCRIPT: &str = r#"{"auf_befehl":{"speak":[
-    {"event":"started","id":"1"},{"event":"done","id":"1"}]}}"#;
+    {"event":"started","id":"2"},{"event":"done","id":"2"}]}}"#;
 
 /// `stt` script that hears `text` right after `listen`.
 fn listen_script(text: &str) -> String {
@@ -276,7 +276,7 @@ fn full_round_trip_of_an_unknown_sentence() {
     nova.wait_for(HelperKind::Wakeword, r#"{"cmd":"pause"}"#);
     nova.wait_for(
         HelperKind::Tts,
-        r#"{"cmd":"speak","id":"1","text":"Das kann ich noch nicht."}"#,
+        r#"{"cmd":"speak","id":"2","text":"Erledigt."}"#,
     );
     nova.wait_for(HelperKind::Stt, r#"{"cmd":"cancel"}"#);
     nova.wait_for(HelperKind::Wakeword, r#"{"cmd":"resume"}"#);
@@ -333,7 +333,7 @@ fn barge_in_sends_stop() {
     nova.say("Eins");
     nova.wait_for(
         HelperKind::Tts,
-        r#"{"cmd":"speak","id":"1","text":"Das kann ich noch nicht."}"#,
+        r#"{"cmd":"speak","id":"2","text":"Erledigt."}"#,
     );
     nova.inject(HelperKind::Stt, HelperEvent::SpeechStart);
 
@@ -349,17 +349,17 @@ fn late_done_of_a_stopped_utterance_is_ignored() {
     nova.say("Eins");
     nova.wait_for(
         HelperKind::Tts,
-        r#"{"cmd":"speak","id":"1","text":"Das kann ich noch nicht."}"#,
+        r#"{"cmd":"speak","id":"2","text":"Erledigt."}"#,
     );
     nova.inject(HelperKind::Stt, HelperEvent::SpeechStart);
     nova.wait_for(HelperKind::Tts, r#"{"cmd":"stop"}"#);
     nova.say("Zwei");
     nova.wait_for(
         HelperKind::Tts,
-        r#"{"cmd":"speak","id":"2","text":"Das kann ich noch nicht."}"#,
+        r#"{"cmd":"speak","id":"4","text":"Erledigt."}"#,
     );
 
-    nova.inject(HelperKind::Tts, HelperEvent::Done { id: "1".into() });
+    nova.inject(HelperKind::Tts, HelperEvent::Done { id: "2".into() });
     thread::sleep(SEVERAL_FOLLOW_UPS);
     assert_eq!(
         nova.count(HelperKind::Stt, r#"{"cmd":"cancel"}"#),
@@ -367,7 +367,7 @@ fn late_done_of_a_stopped_utterance_is_ignored() {
         "no deadline may run while the second utterance plays"
     );
 
-    nova.inject(HelperKind::Tts, HelperEvent::Done { id: "2".into() });
+    nova.inject(HelperKind::Tts, HelperEvent::Done { id: "4".into() });
     nova.wait_for(HelperKind::Stt, r#"{"cmd":"cancel"}"#);
     nova.shut_down().expect("clean shutdown");
 }
@@ -460,7 +460,7 @@ fn barge_in_drops_the_reply() {
 
     nova.wait_for(
         HelperKind::Tts,
-        r#"{"cmd":"speak","id":"2","text":"Das kann ich noch nicht."}"#,
+        r#"{"cmd":"speak","id":"3","text":"Erledigt."}"#,
     );
     assert_eq!(
         nova.spoken_lines(),
@@ -515,7 +515,7 @@ fn panicking_executor_is_caught_by_the_deadline() {
     nova.say("Hallo");
     nova.wait_for(
         HelperKind::Tts,
-        r#"{"cmd":"speak","id":"3","text":"Das kann ich noch nicht."}"#,
+        r#"{"cmd":"speak","id":"4","text":"Das hat zu lange gedauert."}"#,
     );
     nova.shut_down().expect("clean shutdown");
 }
@@ -539,7 +539,7 @@ fn crashed_helper_restarts_once_and_loop_recovers() {
     nova.say("Wieder da");
     nova.wait_for(
         HelperKind::Tts,
-        r#"{"cmd":"speak","id":"1","text":"Das kann ich noch nicht."}"#,
+        r#"{"cmd":"speak","id":"2","text":"Erledigt."}"#,
     );
     nova.shut_down().expect("clean shutdown");
 }
@@ -563,7 +563,7 @@ fn helpers_crashing_together_restart_and_loop_recovers() {
     nova.say("Beide da");
     nova.wait_for(
         HelperKind::Tts,
-        r#"{"cmd":"speak","id":"1","text":"Das kann ich noch nicht."}"#,
+        r#"{"cmd":"speak","id":"2","text":"Erledigt."}"#,
     );
     nova.shut_down().expect("clean shutdown");
 }
@@ -604,7 +604,7 @@ fn exit_during_restart_wait_restarts_that_helper_too() {
     nova.say("Alle da");
     nova.wait_for(
         HelperKind::Tts,
-        r#"{"cmd":"speak","id":"1","text":"Das kann ich noch nicht."}"#,
+        r#"{"cmd":"speak","id":"2","text":"Erledigt."}"#,
     );
 
     // The restart of the other helper counted: its next exit is the second one.
