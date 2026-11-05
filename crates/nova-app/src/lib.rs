@@ -3,6 +3,7 @@
 pub mod commands;
 pub mod helper;
 pub mod launcher;
+pub mod music;
 pub mod protocol;
 pub mod search;
 pub mod supervisor;
