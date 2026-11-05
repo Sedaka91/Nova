@@ -1,7 +1,14 @@
 # Stufe 1 "Anwendungen öffnen": nur hier gelistete Programme dürfen starten.
 # Schlüssel = gesprochener Name (klein), Wert = .desktop-ID für gtk-launch.
-# Beispiel:
-# firefox = "firefox"
-# dolphin = "org.kde.dolphin"
 
 [apps]
+firefox = "firefox"
+chrome = "google-chrome"
+dolphin = "org.kde.dolphin"
+konsole = "org.kde.konsole"
+kate = "org.kde.kate"
+spotify = "spotify"
+obsidian = "obsidian"
+discord = "discord"
+"vs code" = "com.microsoft.VSCode"
+steam = "steam"

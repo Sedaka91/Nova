@@ -47,6 +47,7 @@ pub struct Config {
     pub wakeword: WakeWord,
     pub audio: Audio,
     pub dialog: Dialog,
+    pub wetter: Weather,
 }
 
 #[derive(Debug, Deserialize)]
@@ -161,6 +162,13 @@ pub struct Dialog {
     pub nachfrage_s: f32,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Weather {
+    /// Home place, resolved on every request. Empty until set by hand.
+    pub heimatort: String,
+}
+
 impl Config {
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let config: Self = read_toml(path)?;
@@ -234,6 +242,7 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/nova.toml");
         let config = Config::load(&path).expect("config/nova.toml must load");
         assert_eq!(config.nova.aktivierungswort, "hey nova");
+        assert_eq!(config.wetter.heimatort, "");
     }
 
     fn shipped_text() -> String {

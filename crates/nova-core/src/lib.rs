@@ -1,5 +1,6 @@
 //! Shared types and configuration for Nova.
 
+pub mod apps;
 pub mod config;
 pub mod phrases;
 
